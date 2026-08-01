@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 虚拟环境 / 打包产物
+build_venv/
+build/
+dist/
+*.spec
+
+# 发布产物（体积大，不入库；由 build_exe.bat 重新生成）
+package/
+*.zip
+标签自动打印工具_v*/
+
+# 运行时生成
+profiles/
+
+# IDE
+.vscode/
+.idea/
