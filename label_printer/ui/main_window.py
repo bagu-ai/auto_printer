@@ -424,11 +424,15 @@ class MainWindow(QMainWindow):
             if prev_state and r < len(prev_state):
                 checked, copies = prev_state[r]
             chk.setChecked(checked)
+            # clicked 只响应用户手动切换；批量全选/全不选在循环后统一刷新一次，
+            # 避免 N 行每行触发一次全表扫描形成 O(N²)。
+            chk.clicked.connect(lambda _checked: self._update_summary())
             self.data_table.setCellWidget(r, 0, chk)
             spin = QSpinBox()
             spin.setMinimum(1)
             spin.setMaximum(999)
             spin.setValue(copies)
+            spin.valueChanged.connect(lambda _copies: self._update_summary())
             self.data_table.setCellWidget(r, 1, spin)
             for c, val in enumerate(row):
                 item = QTableWidgetItem(val)
