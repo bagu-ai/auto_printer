@@ -22,11 +22,11 @@ mkdir package\模板
 copy /y "dist\标签自动打印工具.exe" package\ >nul
 copy /y "模板\*.btw" package\模板\ >nul
 copy /y "使用说明.txt" package\ 2>nul
-powershell -NoProfile -Command "Get-Process | Where-Object { $_.ProcessName -match '标签自动打印' } | Stop-Process -Force -ErrorAction SilentlyContinue; Compress-Archive -Path 'package\*' -DestinationPath '标签自动打印工具_v1.0.zip' -Force" || goto :err
+powershell -NoProfile -Command "Get-Process | Where-Object { $_.ProcessName -match '标签自动打印' } | Stop-Process -Force -ErrorAction SilentlyContinue; Compress-Archive -Path 'package\*' -DestinationPath '标签自动打印工具_v1.2.zip' -Force" || goto :err
 
 echo.
 echo ============================================
-echo  完成：标签自动打印工具_v1.0.zip
+echo  完成：标签自动打印工具_v1.2.zip
 echo  解压后双击 exe 即可使用（需 BarTender）
 echo ============================================
 goto :eof

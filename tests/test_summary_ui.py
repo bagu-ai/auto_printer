@@ -27,13 +27,13 @@ def test_manual_checkbox_updates_summary(qapp, tmp_path):
     make_book(path)
     win = MainWindow(MockBackend, MockBackend.name)
     win._load_excel(str(path))
-    assert "勾选 2 行 / 预计 5 张" in win.data_summary.text()
+    assert "勾选 2 行 · 预计 5 张" in win.data_summary.text()
 
     check: QCheckBox = win.data_table.cellWidget(0, 0)
     check.click()  # 模拟用户鼠标/键盘操作（发出 clicked）
     qapp.processEvents()
 
-    assert "勾选 1 行 / 预计 2 张" in win.data_summary.text()
+    assert "勾选 1 行 · 预计 2 张" in win.data_summary.text()
     win.close()
 
 
@@ -42,11 +42,11 @@ def test_manual_copies_change_updates_summary(qapp, tmp_path):
     make_book(path)
     win = MainWindow(MockBackend, MockBackend.name)
     win._load_excel(str(path))
-    assert "勾选 2 行 / 预计 5 张" in win.data_summary.text()
+    assert "勾选 2 行 · 预计 5 张" in win.data_summary.text()
 
     copies: QSpinBox = win.data_table.cellWidget(0, 1)
     copies.setValue(7)
     qapp.processEvents()
 
-    assert "勾选 2 行 / 预计 9 张" in win.data_summary.text()
+    assert "勾选 2 行 · 预计 9 张" in win.data_summary.text()
     win.close()

@@ -18,13 +18,12 @@ BT_SAVE_DO_NOT_SAVE = 0  # BtSaveOptions.btSaveDoNotSaveChanges
 # BtPrintResult 枚举（0=成功）
 BT_PRINT_SUCCESS = 0
 
-# IBtFormat 的 ActiveX DISPID（Print=48 / Preview=53）。
+# IBtFormat.Print 的 ActiveX DISPID（=48）。
 # 已在本机 BarTender 12.0 类型库与真实调用验证；2016 ActiveX 官方文档的接口
 # 顺序一致，但仍需在客户的 2016 主机做最终兼容验证。
-# 两个方法最后一个 Messages 参数均为 [out] IBtMessages**；pywin32 动态 Dispatch
+# Print 最后一个 Messages 参数为 [out] IBtMessages**；pywin32 动态 Dispatch
 # 不能给这个参数传 None，必须用 InvokeTypes 让它自动创建 out 参数。
 DISPID_PRINT = 48
-DISPID_EXPORT_PRINT_PREVIEW = 53
 VT_OUT_DISPATCH = 16393  # pythoncom.VT_BYREF | pythoncom.VT_DISPATCH
 
 
@@ -151,29 +150,6 @@ class BarTenderBackend(PrintBackend):
             "", True, -1,
         )
 
-    def _invoke_preview(self, out_dir: str):
-        """调用含 [out] Messages 的 ExportPrintPreviewToImage。"""
-        import pythoncom  # noqa: PLC0415
-
-        return self._format._oleobj_.InvokeTypes(
-            DISPID_EXPORT_PRINT_PREVIEW, 0, pythoncom.DISPATCH_METHOD,
-            (pythoncom.VT_I4, 0),
-            (
-                (pythoncom.VT_BSTR, pythoncom.PARAMFLAG_FIN),
-                (pythoncom.VT_BSTR, pythoncom.PARAMFLAG_FIN),
-                (pythoncom.VT_BSTR, pythoncom.PARAMFLAG_FIN),
-                (pythoncom.VT_I4, pythoncom.PARAMFLAG_FIN),
-                (pythoncom.VT_I4, pythoncom.PARAMFLAG_FIN),
-                (pythoncom.VT_I4, pythoncom.PARAMFLAG_FIN),
-                (pythoncom.VT_I4, pythoncom.PARAMFLAG_FIN),
-                (pythoncom.VT_BOOL, pythoncom.PARAMFLAG_FIN),
-                (pythoncom.VT_BOOL, pythoncom.PARAMFLAG_FIN),
-                (VT_OUT_DISPATCH, pythoncom.PARAMFLAG_FOUT),
-            ),
-            out_dir, "label_%PageNumber%.png", "png",
-            6, 300, 16777215, 2, False, False,
-        )
-
     def print_label(self, values: dict[str, str], copies: int = 1) -> None:
         if self._format is None:
             raise BackendError("内部错误：尚未打开模板就调用打印")
@@ -193,37 +169,44 @@ class BarTenderBackend(PrintBackend):
             raise BackendError(f"打印失败：{exc}") from exc
 
     def render_preview(self, values: dict[str, str], out_path: str) -> str:
-        """填值后把标签渲染成 PNG（ExportPrintPreviewToImage，2016 起支持）。"""
+        """填值后把**单张标签设计面**直接渲染成 300 DPI PNG。
+
+        优先使用 ExportImage（真实验证：60×30mm → 708×354 px）；旧版本若无该
+        方法则回退 ExportToFile。不要用 ExportPrintPreviewToImage——它导出整张
+        A4 打印页（本机为 2126×3189），缩进校样台后文字必然显得很小、模糊。
+
+        ExportImage/ExportToFile 是旧 ActiveX 方法，没有 [out] Messages 参数
+        （不同于 Print/ExportPrintPreviewToImage），失败表现为抛 COM 异常或不
+        生成文件，因此这里的诊断靠异常原文 + 文件存在性检查。回退只在「方法
+        不存在」时发生，真实渲染错误不会被第二个调用掩盖。
+        """
         if self._format is None:
             raise BackendError("内部错误：尚未打开模板就调用预览")
         import os  # noqa: PLC0415
 
         out_dir = os.path.dirname(os.path.abspath(out_path))
         os.makedirs(out_dir, exist_ok=True)
+        # 尊重调用方给的文件名（backend 契约：写入 out_path）
+        output = os.path.join(out_dir, os.path.basename(out_path))
         try:
             for name, value in values.items():
                 self._set_field(name, value)
-            ret = self._invoke_preview(out_dir)
-            result = ret[0] if isinstance(ret, tuple) else ret
-            if result != BT_PRINT_SUCCESS:
-                detail = _messages_text(ret) or f"BtPrintResult={result}"
-                raise BackendError(f"生成预览失败：{detail}")
-        except BackendError:
-            raise
+            # 打印份数与单张设计面导出无关，但旧模板里若保存了多份数，
+            # 某些版本会按份数导出多页/多图；统一钳为 1 保证只出单张。
+            self._format.PrintSetup.IdenticalCopiesOfLabel = 1
+            export_image = getattr(self._format, "ExportImage", None)
+            if export_image is not None:
+                # (文件, 类型, 24位色, DPI, 覆盖, 背景白, 画标签边框)
+                export_image(output, "png", 6, 300, 2, 16777215, True)
+            else:
+                # BarTender 2016 的旧 ActiveX 接口：导出单张设计面
+                self._format.ExportToFile(output, "png", 6, 300, 2)
         except Exception as exc:
-            raise BackendError(f"生成预览失败：{exc}") from exc
+            raise BackendError(f"生成校样失败：{exc}") from exc
 
-        expected = os.path.join(out_dir, "label_1.png")
-        if os.path.exists(expected):
-            return expected
-        # 文件名页码格式可能随版本不同（label_1.png / label_01.png），兜底找最新的
-        candidates = sorted(
-            (f for f in os.listdir(out_dir) if f.startswith("label_") and f.endswith(".png")),
-            key=lambda f: os.path.getmtime(os.path.join(out_dir, f)),
-            reverse=True)
-        if candidates:
-            return os.path.join(out_dir, candidates[0])
-        raise BackendError("生成预览失败：BarTender 报告成功但找不到输出文件")
+        if os.path.exists(output):
+            return output
+        raise BackendError("生成校样失败：BarTender 未生成图片文件")
 
     def _set_field(self, name: str, value: str) -> None:
         fmt = self._format

@@ -24,7 +24,9 @@ def main() -> int:
         except Exception as exc:
             # BarTender 不可用时给个选择：直接退出或退回干跑模式
             from PySide6.QtWidgets import QApplication, QMessageBox
+            from label_printer.ui.theme import apply_theme
             app = QApplication(sys.argv)
+            apply_theme(app)
             ret = QMessageBox.warning(
                 None, "BarTender 不可用",
                 f"无法连接 BarTender：\n{exc}\n\n"
@@ -38,9 +40,11 @@ def main() -> int:
 
     from PySide6.QtWidgets import QApplication
     from label_printer.ui.main_window import MainWindow
+    from label_printer.ui.theme import apply_theme
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("标签自动打印工具")
+    apply_theme(app)
     window = MainWindow(backend_factory, backend_name)
     window.show()
     return app.exec()

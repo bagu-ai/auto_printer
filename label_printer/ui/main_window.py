@@ -6,19 +6,21 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, QSettings, QSize
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
-    QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
+    QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
+    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
+    QSizePolicy, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem,
+    QTabWidget, QVBoxLayout, QWidget, QAbstractItemView,
 )
 
 from ..core.backend import BackendError, PrintBackend
@@ -29,6 +31,7 @@ from ..core.profiles import (
     FieldMapping, Profile, guess_mapping, load_profile, save_profile,
     validate_jobs,
 )
+from .widgets import CollapsiblePanel, PreviewCanvas, PreviewToolbar, StatusPill
 
 OPTION_NONE = "（留空）"
 OPTION_FIXED = "（固定文本）"
@@ -182,132 +185,249 @@ class MainWindow(QMainWindow):
         self._scan_worker: TemplateScanWorker | None = None
         self._preview_worker: PreviewWorker | None = None
         self._scan_epoch = 0
+        self._preview_epoch = 0
+        self._preview_active_epoch = 0
+        self._preview_pending = False
+        self._latest_preview_path = ""
         self._saved_printer = ""  # 当前模板 profile 里保存的打印机
+        self._backend_name = backend_name
+        self._settings = QSettings("BG0", "LabelPrinter")
+        self._log_count = 0
 
         title = "标签自动打印工具"
         if backend_name:
             title += f" — {backend_name}"
         self.setWindowTitle(title)
-        self.resize(1150, 850)
+        self._compact_screen = False
+        screen = QApplication.primaryScreen().availableGeometry()
         self.setAcceptDrops(True)
 
         self._build_ui()
+
+        # 小屏（如 1366×768 @150% 缩放，逻辑约 910×480）：整体放进滚动区，
+        # 保证底部打印操作条始终可达；普通屏直接定最小尺寸。
+        if screen.width() < 1040 or screen.height() < 660:
+            self._compact_screen = True
+            self._root_panel.setMinimumSize(980, 620)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setWidget(self._root_panel)
+            self.setCentralWidget(scroll)
+            self.setMinimumSize(min(940, screen.width()), min(470, screen.height()))
+        else:
+            self.setMinimumSize(min(1080, screen.width()), min(700, screen.height()))
+        self.resize(min(1440, int(screen.width() * .90)),
+                    min(900, int(screen.height() * .90)))
+
+        geometry = self._settings.value("windowGeometry")
+        if geometry:
+            self.restoreGeometry(geometry)
+            # 恢复的几何可能来自更大/更高 DPI 的屏幕，夹回当前可用区域
+            self.resize(min(self.width(), screen.width()),
+                        min(self.height(), screen.height()))
+        splitter_state = self._settings.value("mainSplitter")
+        if splitter_state:
+            self.main_splitter.restoreState(splitter_state)
+        self.side_tabs.setCurrentIndex(int(self._settings.value("sideTab", 0)))
+        self.log_panel.set_expanded(
+            str(self._settings.value("logExpanded", "false")).lower() == "true")
         self._scan_templates()
 
     # ---------------------------------------------------------------- UI
 
+    def _panel(self, object_name: str = "workPanel") -> tuple[QFrame, QVBoxLayout]:
+        frame = QFrame()
+        frame.setObjectName(object_name)
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(9)
+        return frame, lay
+
+    def _section_title(self, title: str, hint: str = "") -> QHBoxLayout:
+        row = QHBoxLayout()
+        label = QLabel(title)
+        label.setObjectName("sectionTitle")
+        row.addWidget(label)
+        if hint:
+            h = QLabel(hint)
+            h.setObjectName("sectionHint")
+            row.addWidget(h)
+        row.addStretch(1)
+        return row
+
     def _build_ui(self):
         root = QWidget()
-        self.setCentralWidget(root)
+        root.setObjectName("appRoot")
+        self._root_panel = root  # setCentralWidget 在确认屏幕尺寸后进行
         layout = QVBoxLayout(root)
+        layout.setContentsMargins(12, 10, 12, 8)
+        layout.setSpacing(8)
 
-        # --- 1. Excel ---
-        excel_box = QGroupBox("1. Excel 清单（可把文件拖进本窗口）")
-        form = QFormLayout(excel_box)
-        row = QHBoxLayout()
+        # 顶部品牌与运行状态
+        top, top_lay = self._panel("topBar")
+        top_lay.setContentsMargins(16, 10, 16, 10)
+        top_row = QHBoxLayout()
+        title_col = QVBoxLayout()
+        title_col.setSpacing(1)
+        title = QLabel("标签自动打印")
+        title.setObjectName("appTitle")
+        subtitle = QLabel("Excel 数据校验 · BarTender 校样 · 批量打印")
+        subtitle.setObjectName("appSubtitle")
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+        top_row.addLayout(title_col)
+        top_row.addStretch(1)
+        self.runtime_status = StatusPill(
+            f"{self._backend_name or '后端'} 已就绪",
+            "success" if "干跑" not in self._backend_name else "warning")
+        top_row.addWidget(self.runtime_status)
+        self.top_summary = QLabel("等待载入数据")
+        self.top_summary.setObjectName("sectionHint")
+        top_row.addWidget(self.top_summary)
+        top_lay.addLayout(top_row)
+        layout.addWidget(top)
+
+        # 紧凑输入区：Excel 与模板各一行
+        inputs, grid = QFrame(), QGridLayout()
+        inputs.setObjectName("inputPanel")
+        inputs.setLayout(grid)
+        grid.setContentsMargins(14, 11, 14, 11)
+        grid.setHorizontalSpacing(9)
+        grid.setVerticalSpacing(8)
+        grid.addWidget(QLabel("Excel 数据"), 0, 0)
         self.excel_path = QLineEdit()
-        self.excel_path.setPlaceholderText("选择或拖入 .xls / .xlsx 文件…")
+        self.excel_path.setPlaceholderText("拖入或选择 Excel 清单…")
         self.excel_path.setReadOnly(True)
-        btn_excel = QPushButton("浏览…")
-        btn_excel.clicked.connect(self._browse_excel)
-        row.addWidget(self.excel_path, 1)
-        row.addWidget(btn_excel)
-        form.addRow("文件：", row)
-
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("工作表："))
+        grid.addWidget(self.excel_path, 0, 1)
         self.sheet_combo = QComboBox()
+        self.sheet_combo.setMinimumWidth(145)
         self.sheet_combo.currentIndexChanged.connect(self._sheet_changed)
-        row2.addWidget(self.sheet_combo, 1)
-        row2.addWidget(QLabel("表头在第"))
+        grid.addWidget(self.sheet_combo, 0, 2)
         self.header_row = QSpinBox()
-        self.header_row.setMinimum(1)
-        self.header_row.setMaximum(50)
+        self.header_row.setRange(1, 50)
         self.header_row.setValue(1)
+        self.header_row.setPrefix("表头第 ")
+        self.header_row.setSuffix(" 行")
         self.header_row.setKeyboardTracking(False)
-        row2.addWidget(self.header_row)
-        row2.addWidget(QLabel("行"))
+        self.header_row.setMinimumWidth(120)
+        grid.addWidget(self.header_row, 0, 3)
         btn_reload = QPushButton("重新读取")
         btn_reload.clicked.connect(self._reload_excel)
-        row2.addWidget(btn_reload)
-        row2.addStretch(1)
-        form.addRow("选项：", row2)
-        layout.addWidget(excel_box)
+        grid.addWidget(btn_reload, 0, 4)
+        btn_excel = QPushButton("选择 Excel")
+        btn_excel.clicked.connect(self._browse_excel)
+        grid.addWidget(btn_excel, 0, 5)
 
-        # --- 2. 模板 ---
-        tpl_box = QGroupBox("2. BarTender 标签模板")
-        tform = QFormLayout(tpl_box)
-        trow = QHBoxLayout()
+        grid.addWidget(QLabel("标签模板"), 1, 0)
         self.template_combo = QComboBox()
         self.template_combo.currentIndexChanged.connect(self._template_changed)
-        btn_tpl = QPushButton("浏览…")
+        grid.addWidget(self.template_combo, 1, 1, 1, 4)
+        btn_tpl = QPushButton("选择模板")
         btn_tpl.clicked.connect(self._browse_template)
-        trow.addWidget(self.template_combo, 1)
-        trow.addWidget(btn_tpl)
-        tform.addRow("模板：", trow)
-        layout.addWidget(tpl_box)
+        grid.addWidget(btn_tpl, 1, 5)
+        grid.setColumnStretch(1, 1)
+        layout.addWidget(inputs)
 
-        # --- 3. 字段映射 + 标签预览 ---
-        mid_row = QHBoxLayout()
-        map_box = QGroupBox("3. 字段映射（模板字段 ← 取哪一列 / 固定文本）")
-        mlay = QVBoxLayout(map_box)
+        # 主工作区：数据表优先，右侧是按需使用的校样/映射
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setHandleWidth(6)
+
+        data_panel, data_lay = self._panel()
+        data_panel.setMinimumWidth(540)
+        data_lay.addLayout(self._section_title("数据工作台", "勾选要打印的行，并核对每行张数"))
+        data_tools = QHBoxLayout()
+        btn_all = QPushButton("全选")
+        btn_none = QPushButton("全不选")
+        btn_all.setProperty("role", "compact")
+        btn_none.setProperty("role", "compact")
+        btn_all.clicked.connect(lambda: self._set_all_checked(True))
+        btn_none.clicked.connect(lambda: self._set_all_checked(False))
+        data_tools.addWidget(btn_all)
+        data_tools.addWidget(btn_none)
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("搜索编号、香型或任意内容…")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.setMaximumWidth(330)
+        self.search_edit.textChanged.connect(self._filter_rows)
+        data_tools.addWidget(self.search_edit)
+        data_tools.addStretch(1)
+        self.data_summary = QLabel("未加载 Excel")
+        self.data_summary.setObjectName("sectionHint")
+        data_tools.addWidget(self.data_summary)
+        data_lay.addLayout(data_tools)
+
+        self.data_table = QTableWidget(0, 0)
+        self.data_table.setAlternatingRowColors(True)
+        self.data_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.data_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.data_table.setTextElideMode(Qt.ElideRight)
+        self.data_table.verticalHeader().setDefaultSectionSize(36)
+        self.data_table.horizontalHeader().setMinimumHeight(36)
+        self.data_table.itemSelectionChanged.connect(self._schedule_preview)
+        self.data_table.setMinimumHeight(150)
+        data_lay.addWidget(self.data_table, 1)
+        self.main_splitter.addWidget(data_panel)
+
+        self.side_tabs = QTabWidget()
+        self.side_tabs.setMinimumWidth(320)
+        preview_tab = QWidget()
+        pvlay = QVBoxLayout(preview_tab)
+        pvlay.setContentsMargins(10, 10, 10, 10)
+        pvlay.setSpacing(8)
+        pvlay.addLayout(self._section_title("标签校样", "打印前按像素核对"))
+        self.preview_canvas = PreviewCanvas()
+        self.preview_toolbar = PreviewToolbar(self.preview_canvas)
+        self.preview_toolbar.openRequested.connect(self._open_preview_dialog)
+        pvlay.addWidget(self.preview_toolbar)
+        pvlay.addWidget(self.preview_canvas, 1)
+        self.btn_preview = QPushButton("刷新当前行校样")
+        self.btn_preview.clicked.connect(self._refresh_preview)
+        pvlay.addWidget(self.btn_preview)
+        self.side_tabs.addTab(preview_tab, "标签校样")
+
+        mapping_tab = QWidget()
+        mlay = QVBoxLayout(mapping_tab)
+        mlay.setContentsMargins(10, 10, 10, 10)
+        mlay.setSpacing(8)
+        mlay.addLayout(self._section_title("字段映射", "模板字段 ← Excel 列 / 固定文本"))
         self.map_table = QTableWidget(0, 3)
         self.map_table.setHorizontalHeaderLabels(["模板字段", "取值来源", "固定文本 / 列名"])
+        self.map_table.setAlternatingRowColors(True)
+        self.map_table.verticalHeader().setDefaultSectionSize(36)
         self.map_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.map_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.map_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         mlay.addWidget(self.map_table)
-        mid_row.addWidget(map_box, 3)
+        self.side_tabs.addTab(mapping_tab, "字段映射")
+        self.main_splitter.addWidget(self.side_tabs)
+        self.main_splitter.setStretchFactor(0, 65)
+        self.main_splitter.setStretchFactor(1, 35)
+        self.main_splitter.setSizes([900, 500])
+        layout.addWidget(self.main_splitter, 1)
 
-        preview_box = QGroupBox("标签预览（打印前核对）")
-        pvlay = QVBoxLayout(preview_box)
-        self.preview_label = QLabel("选择一行数据后点击「刷新预览」")
-        self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setMinimumSize(360, 200)
-        self.preview_label.setStyleSheet("QLabel { background: #fafafa; border: 1px dashed #bbb; }")
-        pvlay.addWidget(self.preview_label, 1)
-        btn_preview = QPushButton("刷新预览（当前选中行）")
-        btn_preview.clicked.connect(self._refresh_preview)
-        pvlay.addWidget(btn_preview)
-        mid_row.addWidget(preview_box, 2)
-        layout.addLayout(mid_row, 1)
-
-        # --- 4. 数据预览 ---
-        data_box = QGroupBox("4. 数据预览（勾选要打印的行，可改每行张数）")
-        dlay = QVBoxLayout(data_box)
-        drow = QHBoxLayout()
-        btn_all = QPushButton("全选")
-        btn_none = QPushButton("全不选")
-        btn_all.clicked.connect(lambda: self._set_all_checked(True))
-        btn_none.clicked.connect(lambda: self._set_all_checked(False))
-        self.data_summary = QLabel("未加载 Excel")
-        drow.addWidget(btn_all)
-        drow.addWidget(btn_none)
-        drow.addStretch(1)
-        drow.addWidget(self.data_summary)
-        dlay.addLayout(drow)
-        self.data_table = QTableWidget(0, 0)
-        self.data_table.itemSelectionChanged.connect(self._schedule_preview)
-        dlay.addWidget(self.data_table)
-        layout.addWidget(data_box, 1)
-
-        # --- 5. 打印 ---
-        print_box = QGroupBox("5. 打印")
-        play = QVBoxLayout(print_box)
+        # 固定打印操作条
+        print_bar, play = self._panel("printBar")
+        play.setContentsMargins(14, 9, 14, 9)
         prow = QHBoxLayout()
-        prow.addWidget(QLabel("打印机："))
+        prow.addWidget(QLabel("打印机"))
         self.printer_combo = QComboBox()
-        self.printer_combo.setEditable(False)
+        self.printer_combo.setMinimumWidth(300)
+        self.printer_combo.currentIndexChanged.connect(self._schedule_preview)
         self._refresh_printers()
         btn_printer = QPushButton("刷新")
+        btn_printer.setProperty("role", "compact")
         btn_printer.clicked.connect(self._refresh_printers)
         prow.addWidget(self.printer_combo, 1)
         prow.addWidget(btn_printer)
         self.btn_test = QPushButton("试打当前行")
         self.btn_test.clicked.connect(lambda: self._start_print(test_only=True))
-        self.btn_print = QPushButton("全部打印")
+        self.btn_print = QPushButton("打印全部")
+        self.btn_print.setProperty("role", "primary")
         self.btn_print.clicked.connect(lambda: self._start_print(test_only=False))
         self.btn_cancel = QPushButton("取消")
+        self.btn_cancel.setProperty("role", "danger")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self._cancel_print)
         prow.addWidget(self.btn_test)
@@ -315,18 +435,24 @@ class MainWindow(QMainWindow):
         prow.addWidget(self.btn_cancel)
         play.addLayout(prow)
         self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
         self.progress.setValue(0)
         play.addWidget(self.progress)
+        layout.addWidget(print_bar)
+
+        # 运行记录默认收起，错误时自动展开
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(2000)
-        self.log_view.setPlaceholderText("日志…")
-        play.addWidget(self.log_view)
-        layout.addWidget(print_box)
+        self.log_view.setMaximumHeight(180)
+        self.log_view.setPlaceholderText("运行记录…")
+        self.log_panel = CollapsiblePanel("运行记录 · 0 条", self.log_view, False)
+        layout.addWidget(self.log_panel)
 
+        self.statusBar().showMessage("就绪 · 可拖入 Excel 或 .btw 模板")
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
-        self._preview_timer.setInterval(300)
+        self._preview_timer.setInterval(250)
         self._preview_timer.timeout.connect(self._refresh_preview)
 
     # ------------------------------------------------------------ 拖放
@@ -394,6 +520,7 @@ class MainWindow(QMainWindow):
 
         self._fill_data_table(prev_state)
         self._auto_map()
+        self._latest_preview_path = ""  # 数据已变，旧校样不可再打开
         msg = (f"已加载 Excel：{Path(path).name}（工作表「{sheet.sheet_name}」"
                f"{f'，共 {len(sheet.sheet_names)} 个工作表' if len(sheet.sheet_names) > 1 else ''}），"
                f"共 {len(sheet)} 行数据（表头第 {sheet.header_row + 1} 行）")
@@ -420,6 +547,7 @@ class MainWindow(QMainWindow):
         self.data_table.setHorizontalHeaderLabels(cols)
         for r, row in enumerate(sheet.rows):
             chk = QCheckBox()
+            chk.setAccessibleName(f"打印第 {r + 1} 行")
             checked, copies = (True, sheet.copies[r])
             if prev_state and r < len(prev_state):
                 checked, copies = prev_state[r]
@@ -429,6 +557,7 @@ class MainWindow(QMainWindow):
             chk.clicked.connect(lambda _checked: self._update_summary())
             self.data_table.setCellWidget(r, 0, chk)
             spin = QSpinBox()
+            spin.setAccessibleName(f"第 {r + 1} 行张数")
             spin.setMinimum(1)
             spin.setMaximum(999)
             spin.setValue(copies)
@@ -436,10 +565,51 @@ class MainWindow(QMainWindow):
             self.data_table.setCellWidget(r, 1, spin)
             for c, val in enumerate(row):
                 item = QTableWidgetItem(val)
+                item.setToolTip(val)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 self.data_table.setItem(r, 2 + c, item)
-        self.data_table.resizeColumnsToContents()
+        self._apply_data_column_widths()
+        # setRowHidden 挂在行号上、重建 item 不会清除：换文件/切表后必须
+        # 按当前搜索词重新过滤，否则隐藏状态与搜索框内容不一致。
+        self._filter_rows(self.search_edit.text())
+        for r in range(self.data_table.rowCount()):
+            if not self.data_table.isRowHidden(r):
+                self.data_table.selectRow(r)
+                break
         self._update_summary()
+
+    def _apply_data_column_widths(self):
+        """使用业务语义列宽，避免长文本把整个表格挤扁。"""
+        header = self.data_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        widths = {"打印": 56, "张数": 76, "序号": 58}
+        for c in range(self.data_table.columnCount()):
+            name = self.data_table.horizontalHeaderItem(c).text()
+            if name in widths:
+                width = widths[name]
+            elif "香型" in name or name == "英文":
+                width = 190
+            elif "编号" in name:
+                width = 135
+            elif "粒径" in name or "日期" in name:
+                width = 112
+            elif name.startswith("列"):
+                width = 72
+            else:
+                width = 120
+            self.data_table.setColumnWidth(c, width)
+
+    def _filter_rows(self, text: str):
+        needle = text.strip().lower()
+        for r in range(self.data_table.rowCount()):
+            matched = not needle
+            if needle:
+                for c in range(2, self.data_table.columnCount()):
+                    item = self.data_table.item(r, c)
+                    if item and needle in item.text().lower():
+                        matched = True
+                        break
+            self.data_table.setRowHidden(r, not matched)
 
     def _update_summary(self):
         if self.sheet is None:
@@ -454,7 +624,12 @@ class MainWindow(QMainWindow):
             for r in range(self.data_table.rowCount())
             if isinstance(self.data_table.cellWidget(r, 1), QSpinBox)
             and self.data_table.cellWidget(r, 0).isChecked())
-        self.data_summary.setText(f"共 {len(self.sheet)} 行，勾选 {checked} 行 / 预计 {total} 张")
+        summary = f"共 {len(self.sheet)} 行 · 勾选 {checked} 行 · 预计 {total} 张"
+        self.data_summary.setText(summary)
+        self.top_summary.setText(f"数据 {len(self.sheet)} 行  |  待打印 {checked} 行 / {total} 张")
+        self.btn_print.setText(f"打印 {checked} 行 · {total} 张")
+        self.btn_print.setEnabled(checked > 0 and not self._worker_running(self.worker))
+        self.btn_print.setToolTip("" if checked else "请至少勾选一行数据")
 
     def _set_all_checked(self, checked: bool):
         for r in range(self.data_table.rowCount()):
@@ -499,13 +674,23 @@ class MainWindow(QMainWindow):
         self._scan_epoch += 1
         self.template_fields = []
         self.map_table.setRowCount(0)
+        # 模板切换后旧校样即失效，避免「独立查看」打开上个模板的图
+        self._latest_preview_path = ""
+        self.preview_canvas.clear_preview("模板已切换，读取字段后将自动刷新校样")
         self.log(f"正在读取模板字段：{Path(path).name} …")
         worker = TemplateScanWorker(self._backend_factory, path, self._scan_epoch, self)
         worker.fields_ready.connect(self._on_template_fields)
         worker.failed.connect(self._on_template_scan_failed)
         worker.finished.connect(worker.deleteLater)
+        # worker 销毁后属性置空，避免 closeEvent 等处对悬空 C++ 对象调 isRunning
+        worker.finished.connect(self._clear_scan_worker)
         self._scan_worker = worker
         worker.start()
+
+    def _clear_scan_worker(self):
+        # 旧 worker 的 finished 可能晚于新 worker 启动，只清自己
+        if self._scan_worker is self.sender():
+            self._scan_worker = None
 
     def _on_template_fields(self, epoch: int, fields: list[str]):
         if epoch != self._scan_epoch:
@@ -582,6 +767,8 @@ class MainWindow(QMainWindow):
 
             combo.currentTextChanged.connect(
                 lambda text, e=edit: self._mapping_source_changed(text, e))
+            combo.currentTextChanged.connect(lambda _text: self._schedule_preview())
+            edit.textChanged.connect(lambda _text: self._schedule_preview())
             self.map_table.setCellWidget(r, 1, combo)
             self.map_table.setCellWidget(r, 2, edit)
         self.map_table.resizeColumnsToContents()
@@ -635,7 +822,9 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 预览
 
     def _schedule_preview(self):
-        self._preview_timer.start()
+        self._preview_epoch += 1
+        if hasattr(self, "_preview_timer"):
+            self._preview_timer.start()
 
     def _current_row(self) -> int | None:
         r = self.data_table.currentRow()
@@ -648,40 +837,90 @@ class MainWindow(QMainWindow):
             return
         if not self.template_combo.currentData():
             return
-        if self._preview_worker is not None and self._preview_worker.isRunning():
-            return  # 上一张还在渲染，跳过本次
+        if self._worker_running(self._preview_worker):
+            self._preview_pending = True
+            return
         r = self._current_row()
         if r is None:
             return
+        epoch = self._preview_epoch
+        self._preview_active_epoch = epoch
+        self._preview_pending = False
         values = self._values_for_row(r)
-        out_dir = previews_dir()
+        # 固定目录 + 渲染前清空：校样只保留最新一份，previews 目录不膨胀
+        out_dir = previews_dir() / "current"
         out_dir.mkdir(parents=True, exist_ok=True)
-        for old in out_dir.glob("label_*.png"):
-            old.unlink(missing_ok=True)
+        for old in out_dir.glob("*.png"):
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        for legacy in previews_dir().glob("request_*"):  # v1.2 早期版本的按次目录
+            try:
+                shutil.rmtree(legacy, ignore_errors=True)
+            except OSError:
+                pass
         out_path = str(out_dir / "preview.png")
 
-        self.preview_label.setText("预览生成中…")
+        self._latest_preview_path = ""  # 渲染期间旧校样不可再打开
+        self.preview_canvas.clear_preview(f"正在渲染第 {r + 1} 行校样…")
+        self.statusBar().showMessage(f"正在渲染第 {r + 1} 行标签校样…")
         worker = PreviewWorker(self._backend_factory,
                                self.template_combo.currentData(),
                                self.printer_combo.currentData() or "",
                                values, out_path, self)
-        worker.preview_ready.connect(self._on_preview_ready)
-        worker.failed.connect(self._on_preview_failed)
+        worker.preview_ready.connect(
+            lambda path, e=epoch: self._on_preview_ready(e, path))
+        worker.failed.connect(
+            lambda message, e=epoch: self._on_preview_failed(e, message))
         worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._on_preview_worker_finished)
         self._preview_worker = worker
         worker.start()
 
-    def _on_preview_ready(self, path: str):
+    def _on_preview_ready(self, epoch: int, path: str):
+        if epoch != self._preview_epoch:
+            return  # 过期校样不得覆盖用户当前选中的行
         pix = QPixmap(path)
         if pix.isNull():
-            self.preview_label.setText("预览文件无法显示")
+            self.preview_canvas.clear_preview("校样文件无法显示")
             return
-        self.preview_label.setPixmap(pix.scaled(
-            self.preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self._latest_preview_path = path
+        self.preview_canvas.set_pixmap(pix)
+        self.preview_toolbar.set_source_info(pix)
+        self.statusBar().showMessage("校样已更新 · 可用 100% 或独立查看核对细节", 5000)
 
-    def _on_preview_failed(self, message: str):
-        self.preview_label.setText(f"预览失败：{message}")
+    def _on_preview_failed(self, epoch: int, message: str):
+        if epoch != self._preview_epoch:
+            return
+        self._latest_preview_path = ""  # 失败/失效后不得再打开上一张旧校样
+        self.preview_canvas.clear_preview(f"校样生成失败\n{message}")
         self.log(f"[预览失败] {message}")
+        self.log_panel.set_expanded(True)
+        self.statusBar().showMessage("校样生成失败，已展开运行记录", 6000)
+
+    def _on_preview_worker_finished(self):
+        if self._preview_worker is self.sender():
+            self._preview_worker = None
+        if self._preview_pending or self._preview_active_epoch != self._preview_epoch:
+            QTimer.singleShot(0, self._refresh_preview)
+
+    def _open_preview_dialog(self):
+        if not self._latest_preview_path or not Path(self._latest_preview_path).exists():
+            QMessageBox.information(self, "暂无校样", "请先选择一行并生成标签校样。")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("标签校样 · 独立查看")
+        dialog.resize(1000, 700)
+        lay = QVBoxLayout(dialog)
+        canvas = PreviewCanvas()
+        canvas.set_pixmap(QPixmap(self._latest_preview_path))
+        toolbar = PreviewToolbar(canvas)
+        toolbar.open_button.hide()
+        toolbar.set_source_info(canvas.source_pixmap)
+        lay.addWidget(toolbar)
+        lay.addWidget(canvas, 1)
+        dialog.exec()
 
     # ---------------------------------------------------------- 打印
 
@@ -767,7 +1006,7 @@ class MainWindow(QMainWindow):
         return jobs
 
     def _start_print(self, test_only: bool):
-        if self.worker is not None and self.worker.isRunning():
+        if self._worker_running(self.worker):
             return
         jobs = self._build_jobs(test_only)
         if jobs is None:
@@ -799,6 +1038,7 @@ class MainWindow(QMainWindow):
         self.worker.log.connect(self.log)
         self.worker.done.connect(self._on_done)
         self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.finished.connect(self._clear_print_worker)
         self._set_printing_state(True)
         self.progress.setMaximum(len(jobs))
         self.progress.setValue(0)
@@ -809,6 +1049,10 @@ class MainWindow(QMainWindow):
             self.worker.cancel()
             self.log("正在取消…")
 
+    def _clear_print_worker(self):
+        if self.worker is self.sender():
+            self.worker = None
+
     def _on_progress(self, current: int, total: int, message: str):
         self.progress.setMaximum(total)
         self.progress.setValue(current)
@@ -818,7 +1062,11 @@ class MainWindow(QMainWindow):
         self._set_printing_state(False)
         self.log(("✔ " if success else "✘ ") + message)
         self._write_job_log(success, statuses)
+        self.runtime_status.set_state(
+            "打印完成" if success else "打印有失败", "success" if success else "error")
+        self.statusBar().showMessage(message, 8000)
         if not success:
+            self.log_panel.set_expanded(True)
             QMessageBox.warning(self, "打印结果", message)
 
     def _write_job_log(self, success: bool, statuses: list):
@@ -843,17 +1091,32 @@ class MainWindow(QMainWindow):
             self.log(f"[警告] 任务日志写入失败：{exc}")
 
     def _set_printing_state(self, printing: bool):
-        self.btn_print.setEnabled(not printing)
+        self.btn_print.setEnabled(not printing and bool(self._checked_rows()))
         self.btn_test.setEnabled(not printing)
         self.btn_cancel.setEnabled(printing)
+        self.runtime_status.set_state(
+            "正在提交打印任务" if printing else f"{self._backend_name or '后端'} 已就绪",
+            "warning" if printing else ("success" if "干跑" not in self._backend_name else "warning"))
 
     # ---------------------------------------------------------- 杂项
 
     def log(self, message: str):
         self.log_view.appendPlainText(message)
+        self._log_count += 1
+        self.log_panel.set_title(f"运行记录 · {self._log_count} 条")
+
+    @staticmethod
+    def _worker_running(worker) -> bool:
+        """worker 可能已被 deleteLater 销毁（属性尚未置空），按未运行处理。"""
+        if worker is None:
+            return False
+        try:
+            return worker.isRunning()
+        except RuntimeError:
+            return False
 
     def closeEvent(self, event):
-        if self.worker is not None and self.worker.isRunning():
+        if self._worker_running(self.worker):
             self.worker.cancel()
             if not self.worker.wait(10000):
                 ret = QMessageBox.question(
@@ -865,6 +1128,10 @@ class MainWindow(QMainWindow):
                     event.ignore()
                     return
         for w in (self._scan_worker, self._preview_worker):
-            if w is not None and w.isRunning():
+            if self._worker_running(w):
                 w.wait(3000)
+        self._settings.setValue("windowGeometry", self.saveGeometry())
+        self._settings.setValue("mainSplitter", self.main_splitter.saveState())
+        self._settings.setValue("sideTab", self.side_tabs.currentIndex())
+        self._settings.setValue("logExpanded", self.log_panel.is_expanded())
         super().closeEvent(event)
