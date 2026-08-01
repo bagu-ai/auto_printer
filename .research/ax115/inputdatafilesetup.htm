@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html xmlns:MadCap="http://www.madcapsoftware.com/Schemas/MadCap.xsd" lang="en-us" xml:lang="en-us" data-mc-search-type="Stem" data-mc-help-system-file-name="ActiveX.xml" data-mc-path-to-help-system="../" data-mc-target-type="WebHelp2" data-mc-runtime-file-type="Topic" data-mc-preload-images="false" data-mc-in-preview-mode="false" data-mc-toc-path="Getting Started|Examples Using ActiveX Automation">
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta charset="utf-8" />
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+        <link href="../Skins/Default/Stylesheets/Slideshow.css" rel="stylesheet" type="text/css" data-mc-generated="True" />
+        <link href="../Skins/Default/Stylesheets/TextEffects.css" rel="stylesheet" type="text/css" data-mc-generated="True" />
+        <link href="../Skins/Default/Stylesheets/Topic.css" rel="stylesheet" type="text/css" data-mc-generated="True" />
+        <link href="../Skins/Default/Stylesheets/Components/Styles.css" rel="stylesheet" type="text/css" data-mc-generated="True" />
+        <link href="../Skins/Default/Stylesheets/Components/Tablet.css" rel="stylesheet" type="text/css" data-mc-generated="True" />
+        <link href="../Skins/Default/Stylesheets/Components/Mobile.css" rel="stylesheet" type="text/css" data-mc-generated="True" />
+        <link href="../Skins/Default/Stylesheets/Components/Print.css" rel="stylesheet" type="text/css" data-mc-generated="True" /><title>Automating Database Printing</title>
+        <link href="Resources/Stylesheets/WebStyles.css" rel="stylesheet" type="text/css" />
+        <meta name="copyright" content="Seagull Scientific, LLC" />
+        <script src="../Resources/Scripts/jquery.min.js" type="text/javascript">
+        </script>
+        <script src="../Resources/Scripts/purify.min.js" type="text/javascript" defer="defer">
+        </script>
+        <script src="../Resources/Scripts/require.min.js" type="text/javascript" defer="defer">
+        </script>
+        <script src="../Resources/Scripts/require.config.js" type="text/javascript" defer="defer">
+        </script>
+        <script src="../Resources/Scripts/foundation.min.js" type="text/javascript" defer="defer">
+        </script>
+        <script src="../Resources/Scripts/plugins.min.js" type="text/javascript" defer="defer">
+        </script>
+        <script src="../Resources/Scripts/MadCapAll.js" type="text/javascript" defer="defer">
+        </script>
+    </head>
+    <body>
+        <p class="MCWebHelpFramesetLink MCWebHelpFramesetLinkTop"><a href="../ActiveX.htm#inputdatafilesetup.htm">Open topic with navigation</a>
+        </p>
+        <table class="TopicHeaderTable" cellspacing="0">
+            <tr>
+                <td>
+                    <h1>Automating Database Printing</h1>
+                </td>
+            </tr>
+        </table>
+        <p>BarTender documents can be designed to read data from one or more database connections, such as text files or OLE DB and ODBC data sources. Database connection settings are configured by using the <span class="Code"><a href="Databases_collection_.htm">Databases</a></span> collection object, which is a list of individual databases. Each <span class="Code"><a href="Database_Object.htm">Database</a></span> object in the collection contains settings that are specific to the database type. </p>
+        <p>BarTender database connections can be controlled and modified by using ActiveX Automation. Many common methods for controlling database connections are supported, including the following:</p>
+        <ul>
+            <li>
+                <p class="ListItem">Changing a Text File database connection's file name </p>
+            </li>
+            <li>
+                <p class="ListItem">Changing an OLE DB and ODBC SQL query statement </p>
+            </li>
+            <li>
+                <p class="ListItem">Setting query prompts that are defined in a document</p>
+            </li>
+        </ul>
+        <h3>Setting a File Name for a Text File Database Connection</h3>
+        <p>The following example shows how to set a file name for a Text File database connection.</p>
+        <div>
+            <h3><a targets="TextVB" href="javascript:void(0)" class="MCToggler MCTogglerHead MCTogglerHotSpot MCToggler_Open toggler MCTogglerHotSpot_ MCHotSpotImage" data-mc-targets="TextVB"><img class="MCToggler_Image_Icon" src="../Skins/Default/Stylesheets/Images/transparent.gif" height="13" width="16" alt="Closed" data-mc-alt2="Open" />In VB.NET</a>
+            </h3>
+            <div style="display: none;" data-mc-target-name="TextVB">
+                <div class="Example">
+                    <p class="Indent1"><span class="Green">'Declare a BarTender application variable</span>
+                    </p>
+                    <p class="Indent1"><span class="Blue">Dim</span> btApp <span class="Blue">As</span> BarTender.Application </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Declare a BarTender document variable</span>
+                    </p>
+                    <p class="Indent1"><span class="Blue">Dim</span> btFormat <span class="Blue">As</span> BarTender.Format </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Declare a BarTender database variable</span>
+                    </p>
+                    <p class="Indent1"><span class="Blue">Dim</span> btDb <span class="Blue">As</span> BarTender.Database </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Create a new instance of BarTender</span>
+                    </p>
+                    <p class="Indent1">btApp = <span class="Blue">New</span> BarTender.Application</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Set the BarTender application visible</span>
+                    </p>
+                    <p class="Indent1">btApp.Visible = <span class="Blue">True</span></p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Open a BarTender document</span>
+                    </p>
+                    <p class="Indent1">btFormat = btApp.Formats.Open(<span class="Gray">"c:\Format1.btw"</span>, <span class="Blue">False</span>, <span class="Gray">""</span>)</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Select the database</span>
+                    </p>
+                    <p class="Indent1">btDb = btFormat.Databases.GetDatabase(1)</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Set the database to demo.dat</span>
+                    </p>
+                    <p class="Indent1">btDb.TextFile.FileName= <span class="Gray">"c:\Demo.dat"</span></p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'End the BarTender process </span>
+                    </p>
+                    <p class="Indent1">btApp.Quit(BarTender.BtSaveOptions.btDoNotSaveChanges) </p>
+                </div>
+            </div>
+        </div>
+        <div>
+            <h3><a targets="TextCSharp" href="javascript:void(0)" class="MCToggler MCTogglerHead MCTogglerHotSpot MCToggler_Open toggler MCTogglerHotSpot_ MCHotSpotImage" data-mc-targets="TextCSharp"><img class="MCToggler_Image_Icon" src="../Skins/Default/Stylesheets/Images/transparent.gif" height="13" width="16" alt="Closed" data-mc-alt2="Open" />In C#</a>
+            </h3>
+            <div style="display: none;" data-mc-target-name="TextCSharp">
+                <div class="Example">
+                    <p class="Indent1"><span class="Green">// Declare a BarTender application variable </span>
+                    </p>
+                    <p class="Indent1">BarTender.Application btApp; </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Declare a BarTender document variable </span>
+                    </p>
+                    <p class="Indent1">BarTender.Format btFormat; </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Declare a BarTender database variable </span>
+                    </p>
+                    <p class="Indent1">BarTender.Database btDb; </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Create a new instance of BarTender </span>
+                    </p>
+                    <p class="Indent1">btApp = <span class="Blue">new</span> BarTender.Application();</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Set the BarTender application visible</span>
+                    </p>
+                    <p class="Indent1">btApp.Visible = <span class="Blue">true</span>;</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Open a BarTender document</span>
+                    </p>
+                    <p class="Indent1">btFormat = btApp.Formats.Open(<span class="Gray">"c:\\Format1.btw"</span>, <span class="Blue">false</span>, <span class="Gray">""</span>);</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Select the database</span>
+                    </p>
+                    <p class="Indent1">btDb = btFormat.Databases.GetDatabase(1);</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Set the database to demo.dat</span>
+                    </p>
+                    <p class="Indent1">btDb.TextFile.FileName = <span class="Gray">"c:\\Demo.dat"</span>;</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// End the BarTender process </span>
+                    </p>
+                    <p class="Indent1">btApp.Quit(BarTender.BtSaveOptions.btDoNotSaveChanges); </p>
+                </div>
+            </div>
+        </div>
+        <h3>Changing the SQL Statement</h3>
+        <p>Custom SQL statements can be run on a connected database to perform record filtering when data is browsed or to select database records at print time. To apply a custom SQL statement, use the <a href="SQLStatement_Property_(Database).htm">Database.SQLStatement</a> property.</p>
+        <p>The following example shows how to set a custom SQL statement.</p>
+        <div>
+            <h3><a targets="SQLVB" href="javascript:void(0)" class="MCToggler MCTogglerHead MCTogglerHotSpot MCToggler_Open toggler MCTogglerHotSpot_ MCHotSpotImage" data-mc-targets="SQLVB"><img class="MCToggler_Image_Icon" src="../Skins/Default/Stylesheets/Images/transparent.gif" height="13" width="16" alt="Closed" data-mc-alt2="Open" />In VB.NET</a>
+            </h3>
+            <div style="display: none;" data-mc-target-name="SQLVB">
+                <div class="Example">
+                    <p class="Indent1"><span class="Green">'Declare a BarTender application variable</span>
+                    </p>
+                    <p class="Indent1"><span class="Blue">Dim</span> btApp <span class="Blue">As</span> BarTender.Application </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Declare a BarTender document variable</span>
+                    </p>
+                    <p class="Indent1"><span class="Blue">Dim</span> btFormat <span class="Blue">As</span> BarTender.Format </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Declare a BarTender database variable</span>
+                    </p>
+                    <p class="Indent1"><span class="Blue">Dim</span> btDb <span class="Blue">As</span> BarTender.Database </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Create a new instance of BarTender</span>
+                    </p>
+                    <p class="Indent1">btApp = <span class="Blue">New</span> BarTender.Application</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Set the BarTender application visible</span>
+                    </p>
+                    <p class="Indent1">btApp.Visible = <span class="Blue">True</span></p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Open a BarTender document</span>
+                    </p>
+                    <p class="Indent1">btFormat = btApp.Formats.Open(<span class="Gray">"c:\Format1.btw"</span>, <span class="Blue">False</span>, <span class="Gray">""</span>)</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Select the database</span>
+                    </p>
+                    <p class="Indent1">btDb = btFormat.Databases.GetDatabase(1)</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Set the SQL statement</span>
+                    </p>
+                    <p class="Indent1">btDb.SQLStatement = <span class="Gray">"SELECT * FROM 'Customers' WHERE 'Name'='Frank Wild'"</span></p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'End the BarTender process </span>
+                    </p>
+                    <p class="Indent1">btApp.Quit(BarTender.BtSaveOptions.btDoNotSaveChanges) </p>
+                </div>
+            </div>
+        </div>
+        <div>
+            <h3><a targets="SQLC" href="javascript:void(0)" class="MCToggler MCTogglerHead MCTogglerHotSpot MCToggler_Open toggler MCTogglerHotSpot_ MCHotSpotImage" data-mc-targets="SQLC"><img class="MCToggler_Image_Icon" src="../Skins/Default/Stylesheets/Images/transparent.gif" height="13" width="16" alt="Closed" data-mc-alt2="Open" />In C#</a>
+            </h3>
+            <div style="display: none;" data-mc-target-name="SQLC">
+                <div class="Example">
+                    <p class="Indent1"><span class="Green">// Declare a BarTender application variable </span>
+                    </p>
+                    <p class="Indent1">BarTender.Application btApp; </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Declare a BarTender document variable </span>
+                    </p>
+                    <p class="Indent1">BarTender.Format btFormat; </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Declare a BarTender database variable </span>
+                    </p>
+                    <p class="Indent1">BarTender.Database btDb; </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Create a new instance of BarTender </span>
+                    </p>
+                    <p class="Indent1">btApp = <span class="Blue">new</span> BarTender.Application();</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Set the BarTender application visible</span>
+                    </p>
+                    <p class="Indent1">btApp.Visible = <span class="Blue">true</span>;</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Open a BarTender document</span>
+                    </p>
+                    <p class="Indent1">btFormat = btApp.Formats.Open(<span class="Gray">"c:\\Format1.btw"</span>, <span class="Blue">false</span>, <span class="Gray">""</span>);</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Select the database</span>
+                    </p>
+                    <p class="Indent1">btDb = btFormat.Databases.GetDatabase(1);</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Set the SQL statement</span>
+                    </p>
+                    <p class="Indent1">btDb.SQLStatement = <span class="Gray">"SELECT * FROM 'Customers' WHERE 'Name'='Frank Wild'"</span>;</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// End the BarTender process </span>
+                    </p>
+                    <p class="Indent1">btApp.Quit(BarTender.BtSaveOptions.btDoNotSaveChanges); </p>
+                </div>
+            </div>
+        </div>
+        <h3>Setting Query Prompts</h3>
+        <p>A query prompt, which is defined as part of the attached database, is used to select the records that are used when a print job runs. The <span class="Code">Format</span> object contains a list of all of the query prompts that are defined for a BarTender document. These are stored in the <span class="Code"><a href="QueryPrompts_collection_.htm">QueryPrompts</a></span> collection object.</p>
+        <p>The following example shows the use of query prompts via ActiveX Automation.</p>
+        <div>
+            <h3><a targets="QueryVB" href="javascript:void(0)" class="MCToggler MCTogglerHead MCTogglerHotSpot MCToggler_Open toggler MCTogglerHotSpot_ MCHotSpotImage" data-mc-targets="QueryVB"><img class="MCToggler_Image_Icon" src="../Skins/Default/Stylesheets/Images/transparent.gif" height="13" width="16" alt="Closed" data-mc-alt2="Open" />In VB.NET</a>
+            </h3>
+            <div style="display: none;" data-mc-target-name="QueryVB">
+                <div class="Example">
+                    <p class="Indent1"><span class="Green">'Declare a BarTender application variable</span>
+                    </p>
+                    <p class="Indent1"><span class="Blue">Dim</span> btApp <span class="Blue">As</span> BarTender.Application </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Declare a BarTender document variable</span>
+                    </p>
+                    <p class="Indent1"><span class="Blue">Dim</span> btFormat <span class="Blue">As</span> BarTender.Format </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Declare a BarTender query prompt variable</span>
+                    </p>
+                    <p class="Indent1"><span class="Blue">Dim</span> btQueryPrompt <span class="Blue">As</span> BarTender.QueryPrompt </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Create a new instance of BarTender</span>
+                    </p>
+                    <p class="Indent1">btApp = <span class="Blue">New</span> BarTender.Application</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Set the BarTender application visible</span>
+                    </p>
+                    <p class="Indent1">btApp.Visible = <span class="Blue">True</span></p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Open a BarTender document</span>
+                    </p>
+                    <p class="Indent1">btFormat = btApp.Formats.Open(<span class="Gray">"c:\Format1.btw"</span>, <span class="Blue">False</span>, <span class="Gray">""</span>)</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Select the query prompt</span>
+                    </p>
+                    <p class="Indent1">btQueryPrompt = btFormat.Databases.QueryPrompts.GetQueryPrompt(<span class="Gray">"Name"</span>)</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Set the value of the query prompt</span>
+                    </p>
+                    <p class="Indent1">btQueryPrompt.Value = <span class="Gray">"Jane Doe"</span></p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'End the BarTender process </span>
+                    </p>
+                    <p class="Indent1">btApp.Quit(BarTender.BtSaveOptions.btDoNotSaveChanges) </p>
+                </div>
+            </div>
+        </div>
+        <div>
+            <h3><a targets="QueryCSharp" href="javascript:void(0)" class="MCToggler MCTogglerHead MCTogglerHotSpot MCToggler_Open toggler MCTogglerHotSpot_ MCHotSpotImage" data-mc-targets="QueryCSharp"><img class="MCToggler_Image_Icon" src="../Skins/Default/Stylesheets/Images/transparent.gif" height="13" width="16" alt="Closed" data-mc-alt2="Open" />In C#</a>
+            </h3>
+            <div style="display: none;" data-mc-target-name="QueryCSharp">
+                <div class="Example">
+                    <p class="Indent1"><span class="Green">// Declare a BarTender application variable </span>
+                    </p>
+                    <p class="Indent1">BarTender.Application btApp; </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Declare a BarTender document variable </span>
+                    </p>
+                    <p class="Indent1">BarTender.Format btFormat; </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Declare a BarTender query prompt variable </span>
+                    </p>
+                    <p class="Indent1">BarTender.QueryPrompt btQueryPrompt; </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Create a new instance of BarTender </span>
+                    </p>
+                    <p class="Indent1">btApp = <span class="Blue">new</span> BarTender.Application();</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Set the BarTender application visible</span>
+                    </p>
+                    <p class="Indent1">btApp.Visible = <span class="Blue">true</span>;</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Open a BarTender document</span>
+                    </p>
+                    <p class="Indent1">btFormat = btApp.Formats.Open(<span class="Gray">"c:\\Format1.btw"</span>, <span class="Blue">false</span>, <span class="Gray">""</span>);</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Select the query prompt</span>
+                    </p>
+                    <p class="Indent1">btQueryPrompt = btFormat.Databases.QueryPrompts.GetQueryPrompt(<span class="Gray">"Name"</span>);</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Set the value of the query prompt</span>
+                    </p>
+                    <p class="Indent1">btQueryPrompt.Value = <span class="Gray">"Jane Doe"</span>;</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// End the BarTender process </span>
+                    </p>
+                    <p class="Indent1">btApp.Quit(BarTender.BtSaveOptions.btDoNotSaveChanges); </p>
+                </div>
+            </div>
+        </div>
+        <p><b>Related Topics</b>
+        </p>
+        <ul class="RelatedTopics">
+            <li><a class="RelatedTopic" href="saving_formats.htm">Saving BarTender Documents</a>
+            </li>
+            <li><a class="RelatedTopic" href="printing_formats.htm">Printing BarTender Documents</a>
+            </li>
+            <li><a class="RelatedTopic" href="Changing_data.htm">Changing Data on a Template</a>
+            </li>
+        </ul>
+        <p>&#160;</p>
+    </body>
+</html>

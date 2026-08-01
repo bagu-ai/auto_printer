@@ -6,11 +6,28 @@
 
 1. 把 `标签自动打印工具.exe` 和 `模板` 文件夹放在同一目录（`模板` 里放 `.btw` 文件）
 2. 双击运行（要求本机已装 **BarTender Automation / Enterprise 版**，并接好标签打印机）
-3. 拖入 Excel 清单（.xls / .xlsx）→ 自动识别表头行与每行默认张数（按「送样数量」如 `10g*3瓶` → 3 张）
-4. 选择模板（中文版 / 英文版）→ 工具自动列出模板里的命名数据源
-5. 核对「字段映射」：每个模板字段取哪一列（或固定文本、留空）。同名自动匹配，映射会按模板自动保存，下次直接用
-6. 在数据预览里勾选要打印的行、修改每行张数
-7. 选打印机（默认用模板里保存的），先 **试打第一张** 核对，再 **全部打印**
+3. 拖入 Excel 清单（.xls / .xlsx）
+   - 自动识别表头行；多工作表文件可选「工作表」
+   - 日期列自动格式化为 `YYYY-MM-DD`（不会打出 `00:00:00`）
+   - 「送样数量」列如 `10g*3瓶` 自动解析为每行默认张数（3 张）
+4. 选择模板（中文版 / 英文版）→ 后台自动读取模板里的命名数据源
+5. 核对「字段映射」：每个模板字段取哪一列（或固定文本、留空）。同名自动匹配，映射按模板自动保存，下次直接用
+6. 点「刷新预览」查看**当前选中行的真实标签效果图**（BarTender 渲染，不消耗标签纸）
+7. 在数据预览里勾选要打印的行、修改每行张数
+8. 选打印机（默认用模板里保存的，选择会随映射一起记住）
+9. 点「试打当前行」或「全部打印」——打印前自动**预检**（空值、重复编号、未映射字段）
+10. 每次打印的任务记录保存在日志里，便于查错补打
+
+## 数据存放位置
+
+| 内容 | 位置 |
+|---|---|
+| 映射配置 | `%APPDATA%\标签自动打印工具\profiles\` |
+| 打印任务日志 | `%APPDATA%\标签自动打印工具\logs\` |
+| 预览图缓存 | `%APPDATA%\标签自动打印工具\previews\` |
+| 模板（只读资源） | exe 同目录 `模板\` |
+
+> 配置文件按「模板名+路径指纹」保存，不同目录的同名模板互不干扰；v1.0 的旧配置会自动迁移。
 
 ## 模板准备（一次性）
 
@@ -25,21 +42,28 @@ BarTender 中双击文本/条码对象 → 数据源 → **名称** 填一个有
 ```bash
 pip install -r requirements.txt
 
-# 单元测试（Excel 解析、张数解析、映射配置）
+# 单元测试（43 个：Excel 解析/格式化/多表、映射配置、预检、worker 线程模型、路径）
 pytest
 
 # 开发机无 BarTender：干跑模式演示全流程（打印动作只写日志）
 python -m label_printer --mock
 
-# 离屏自测（不弹窗，跑通 加载→映射→模拟打印）
+# 离屏自测（不弹窗：加载→映射→预览PNG→线程打印→任务日志）
 python tools/smoke_mock.py
 
 # 连接真 BarTender 运行
 python -m label_printer
 
-# 打包 exe
+# 打包 exe（自动重建发布 zip）
 build_exe.bat
 ```
+
+## 架构要点
+
+- **COM 线程亲和**：BarTender COM 对象只在 QThread 内创建、使用、销毁（`pythoncom.CoInitialize` 配对），绝不跨线程共享——真机打印稳定性的关键
+- **后端抽象**：`PrintBackend` 接口 + BarTender / mock 双实现，UI 只面向接口；开发机无 BarTender 也能演示全流程
+- **标签预览**：`ExportPrintPreviewToImage`（BarTender 2016+ Enterprise Automation）渲染 PNG，打印前视觉核对，不耗标签
+- **打印结果校验**：`Format.Print` 等到任务提交 spooler 并检查 `BtPrintResult` 与 Messages，失败行带 BarTender 原始错误
 
 ## 目录结构
 
@@ -47,13 +71,14 @@ build_exe.bat
 label_printer/
   __main__.py            入口（--mock 干跑模式）
   core/
-    excel_reader.py      Excel 加载、表头自动探测、张数解析
-    profiles.py          映射配置 JSON 读写（按模板保存）
+    excel_reader.py      Excel 加载、表头探测、单元格显示值格式化、张数解析
+    profiles.py          映射配置（模板名+路径哈希）、预检 validate_jobs
+    paths.py             resource_dir（只读资源）/ state_dir（%APPDATA%）
     backend.py           打印后端抽象接口
     bartender_backend.py BarTender COM 实现（目标机）
     mock_backend.py      干跑实现（开发机调试）
-  ui/main_window.py      PySide6 主界面
-tests/                   pytest 单测
+  ui/main_window.py      PySide6 主界面（三个 QThread worker：扫描/预览/打印）
+tests/                   pytest 单测（真实 xls 样例存在才跑，核心用例全部临时生成）
 tools/smoke_mock.py      离屏全流程自测
-profiles/                运行时生成的映射配置（exe 同目录）
+.github/workflows/ci.yml Windows CI（pytest + 冒烟）
 ```

@@ -14,11 +14,13 @@ def main() -> int:
 
     if args.mock:
         from label_printer.core.mock_backend import MockBackend
-        backend = MockBackend()
+        backend_factory = MockBackend
+        backend_name = MockBackend.name
     else:
         try:
             from label_printer.core.bartender_backend import BarTenderBackend
-            backend = BarTenderBackend()
+            backend_factory = BarTenderBackend
+            backend_name = BarTenderBackend.name
         except Exception as exc:
             # BarTender 不可用时给个选择：直接退出或退回干跑模式
             from PySide6.QtWidgets import QApplication, QMessageBox
@@ -31,14 +33,15 @@ def main() -> int:
             if ret != QMessageBox.Yes:
                 return 1
             from label_printer.core.mock_backend import MockBackend
-            backend = MockBackend()
+            backend_factory = MockBackend
+            backend_name = MockBackend.name
 
     from PySide6.QtWidgets import QApplication
     from label_printer.ui.main_window import MainWindow
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("标签自动打印工具")
-    window = MainWindow(backend)
+    window = MainWindow(backend_factory, backend_name)
     window.show()
     return app.exec()
 

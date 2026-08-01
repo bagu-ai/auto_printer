@@ -1,9 +1,10 @@
-"""Excel 清单读取：自动探测表头行、解析每行默认打印张数。
+"""Excel 清单读取：多 sheet 支持、自动探测表头行、单元格显示值格式化、每行默认张数。
 
 纯 Python / pandas 实现，不依赖 GUI 与 BarTender，可单独测试。
 """
 from __future__ import annotations
 
+import datetime as _dt
 import re
 from dataclasses import dataclass, field
 
@@ -27,13 +28,20 @@ class SheetData:
 
     path: str
     columns: list[str]
-    rows: list[list[str]]            # 全部字符串化，空值为 ""
+    rows: list[list[str]]            # 全部按显示值字符串化，空值为 ""
     copies: list[int]                # 每行默认打印张数（从送样数量解析，默认 1）
     header_row: int                  # 表头在原表中的行号（0 起）
     copies_column: str | None = field(default=None)
+    sheet_names: list[str] = field(default_factory=list)  # 工作簿全部 sheet 名
+    sheet_name: str = ""             # 当前读取的 sheet 名
 
     def __len__(self) -> int:
         return len(self.rows)
+
+
+def list_sheet_names(path: str) -> list[str]:
+    """返回工作簿的全部 sheet 名。"""
+    return list(pd.ExcelFile(path).sheet_names)
 
 
 def detect_header_row(raw: pd.DataFrame) -> int:
@@ -45,6 +53,31 @@ def detect_header_row(raw: pd.DataFrame) -> int:
         if hits > best_hits:
             best_row, best_hits = i, hits
     return best_row if best_hits >= MIN_KEYWORD_HITS else 0
+
+
+def format_cell(v) -> str:
+    """把单元格值转成适合打印的显示文本。
+
+    - 日期时间：零时间 → YYYY-MM-DD；否则 YYYY-MM-DD HH:MM
+    - 整值浮点：3.0 → "3"（避免标签上出现多余的 .0）
+    - 其余：去首尾空白的字符串
+    """
+    if v is None or (isinstance(v, float) and pd.isna(v)) or v is pd.NaT:
+        return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    if isinstance(v, (pd.Timestamp, _dt.datetime)):
+        if v.hour == 0 and v.minute == 0 and v.second == 0:
+            return v.strftime("%Y-%m-%d")
+        return v.strftime("%Y-%m-%d %H:%M")
+    if isinstance(v, _dt.date):
+        return v.strftime("%Y-%m-%d")
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v).strip()
 
 
 def parse_copies(text: str) -> int:
@@ -78,14 +111,21 @@ def _dedupe_columns(names: list[str]) -> list[str]:
     return out
 
 
-def load_excel(path: str, header_row: int | None = None) -> SheetData:
+def load_excel(path: str, sheet_name: str | None = None,
+               header_row: int | None = None) -> SheetData:
     """加载 .xls/.xlsx 清单。
 
-    header_row 为 None 时自动探测；否则使用指定行（0 起，指原表行号）。
+    sheet_name 为 None 时读第一个 sheet；header_row 为 None 时自动探测（0 起原表行号）。
     """
-    raw = pd.read_excel(path, header=None, dtype=object)
+    sheet_names = list_sheet_names(path)
+    if sheet_name is None:
+        sheet_name = sheet_names[0]
+    elif sheet_name not in sheet_names:
+        raise ValueError(f"工作表「{sheet_name}」不存在（可选：{'、'.join(sheet_names)}）")
+
+    raw = pd.read_excel(path, sheet_name=sheet_name, header=None, dtype=object)
     if raw.empty:
-        raise ValueError("Excel 文件是空的")
+        raise ValueError(f"工作表「{sheet_name}」是空的")
 
     if header_row is None:
         header_row = detect_header_row(raw)
@@ -95,7 +135,7 @@ def load_excel(path: str, header_row: int | None = None) -> SheetData:
 
     rows: list[list[str]] = []
     for _, r in body.iterrows():
-        values = ["" if pd.isna(v) else str(v).strip() for v in r]
+        values = [format_cell(v) for v in r]
         if any(values):  # 跳过整行空白
             rows.append(values)
 
@@ -112,4 +152,6 @@ def load_excel(path: str, header_row: int | None = None) -> SheetData:
         copies=copies,
         header_row=header_row,
         copies_column=copies_column,
+        sheet_names=sheet_names,
+        sheet_name=sheet_name,
     )

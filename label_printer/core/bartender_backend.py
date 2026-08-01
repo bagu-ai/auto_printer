@@ -1,14 +1,22 @@
 """BarTender COM 后端：驱动 BarTender Enterprise Automation 填值并打印。
 
-只在装有 BarTender 的目标机上使用；所有 COM 错误都转成 BackendError（中文提示）。
+线程纪律（重要）：本类的实例必须在**同一个线程**内创建、使用、销毁，
+且该线程须已调用 pythoncom.CoInitialize()。由 worker 线程负责工厂创建，
+不要跨线程传递本实例或其中的 COM 对象。
+
+所有 COM 错误都转成 BackendError（中文提示）。
 """
 from __future__ import annotations
 
 from .backend import BackendError, PrintBackend
 
-# BarTender 常量（避免依赖 makepy 生成的常量模块）
-BT_FORMAT_OPEN_READ_ONLY = True
+# Formats.Open 第二参数：关闭 BarTender 启动时自动打开的空白 Document1.btw
+# （官方文档签名：Formats.Open(PathAndFileName, CloseOutFirstDocument, UsePrinter)）
+BT_CLOSE_OUT_FIRST_DOCUMENT = True
 BT_SAVE_DO_NOT_SAVE = 0  # BtSaveOptions.btSaveDoNotSaveChanges
+
+# BtPrintResult 枚举（0=成功）
+BT_PRINT_SUCCESS = 0
 
 
 def _import_win32com():
@@ -20,6 +28,17 @@ def _import_win32com():
             "缺少 pywin32 组件，无法连接 BarTender。\n"
             "请运行：pip install pywin32"
         ) from exc
+
+
+def _messages_text(ret) -> str:
+    """Format.Print 的返回可能是 (result, messages) 元组，提取消息文本。"""
+    if not isinstance(ret, tuple) or len(ret) < 2:
+        return ""
+    msgs = ret[1]
+    try:
+        return "；".join(str(m.Message) for m in msgs) or ""
+    except Exception:
+        return str(msgs) if msgs else ""
 
 
 class BarTenderBackend(PrintBackend):
@@ -50,7 +69,7 @@ class BarTenderBackend(PrintBackend):
         app = self._ensure_app()
         fmt = None
         try:
-            fmt = app.Formats.Open(template_path, BT_FORMAT_OPEN_READ_ONLY, "")
+            fmt = app.Formats.Open(template_path, BT_CLOSE_OUT_FIRST_DOCUMENT, "")
             return self._collect_fields(fmt)
         except BackendError:
             raise
@@ -82,17 +101,13 @@ class BarTenderBackend(PrintBackend):
         return fields
 
     def list_printers(self) -> list[str]:
+        """只走 win32print（非 COM，可在任意线程调用）。"""
         try:
             import win32print  # noqa: PLC0415
             flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
             return [p[2] for p in win32print.EnumPrinters(flags)]
         except Exception:
-            # 退回 BarTender 的打印机列表
-            try:
-                app = self._ensure_app()
-                return [str(p) for p in app.Printers]
-            except Exception:
-                return []
+            return []
 
     # ---- 打印 -----------------------------------------------------------
 
@@ -100,7 +115,7 @@ class BarTenderBackend(PrintBackend):
         self.close_format()
         app = self._ensure_app()
         try:
-            self._format = app.Formats.Open(template_path, False, printer or "")
+            self._format = app.Formats.Open(template_path, BT_CLOSE_OUT_FIRST_DOCUMENT, printer or "")
             if printer:
                 self._format.PrintSetup.Printer = printer
         except Exception as exc:
@@ -115,11 +130,52 @@ class BarTenderBackend(PrintBackend):
                 self._set_field(name, value)
             setup = self._format.PrintSetup
             setup.IdenticalCopiesOfLabel = max(1, int(copies))
-            self._format.PrintOut(False, False)  # 不弹打印对话框、不等完成
+            # Format.Print(作业名, 等提交spooler, 超时ms, 消息输出) → (BtPrintResult, Messages)
+            ret = self._format.Print("", True, -1, None)
+            result = ret[0] if isinstance(ret, tuple) else ret
+            if result != BT_PRINT_SUCCESS:
+                detail = _messages_text(ret) or f"BtPrintResult={result}"
+                raise BackendError(f"BarTender 打印失败：{detail}")
         except BackendError:
             raise
         except Exception as exc:
             raise BackendError(f"打印失败：{exc}") from exc
+
+    def render_preview(self, values: dict[str, str], out_path: str) -> str:
+        """填值后把标签渲染成 PNG（ExportPrintPreviewToImage，2016 起支持）。"""
+        if self._format is None:
+            raise BackendError("内部错误：尚未打开模板就调用预览")
+        import os  # noqa: PLC0415
+
+        out_dir = os.path.dirname(os.path.abspath(out_path))
+        os.makedirs(out_dir, exist_ok=True)
+        try:
+            for name, value in values.items():
+                self._set_field(name, value)
+            # (目录, 文件名模板, 类型, 颜色=24位, DPI=300, 背景=白, 保存选项=2, 含边距=False, 含边框=False, 消息)
+            ret = self._format.ExportPrintPreviewToImage(
+                out_dir, "label_%PageNumber%.png", "png",
+                6, 300, 16777215, 2, False, False, None)
+            result = ret[0] if isinstance(ret, tuple) else ret
+            if result != BT_PRINT_SUCCESS:
+                detail = _messages_text(ret) or f"BtPrintResult={result}"
+                raise BackendError(f"生成预览失败：{detail}")
+        except BackendError:
+            raise
+        except Exception as exc:
+            raise BackendError(f"生成预览失败：{exc}") from exc
+
+        expected = os.path.join(out_dir, "label_1.png")
+        if os.path.exists(expected):
+            return expected
+        # 文件名页码格式可能随版本不同（label_1.png / label_01.png），兜底找最新的
+        candidates = sorted(
+            (f for f in os.listdir(out_dir) if f.startswith("label_") and f.endswith(".png")),
+            key=lambda f: os.path.getmtime(os.path.join(out_dir, f)),
+            reverse=True)
+        if candidates:
+            return os.path.join(out_dir, candidates[0])
+        raise BackendError("生成预览失败：BarTender 报告成功但找不到输出文件")
 
     def _set_field(self, name: str, value: str) -> None:
         fmt = self._format

@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html xmlns:MadCap="http://www.madcapsoftware.com/Schemas/MadCap.xsd" lang="en-us" xml:lang="en-us" data-mc-search-type="Stem" data-mc-help-system-file-name="ActiveX.xml" data-mc-path-to-help-system="../" data-mc-target-type="WebHelp2" data-mc-runtime-file-type="Topic" data-mc-preload-images="false" data-mc-in-preview-mode="false" data-mc-toc-path="Getting Started|Using ActiveX Objects">
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta charset="utf-8" />
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+        <link href="../Skins/Default/Stylesheets/Slideshow.css" rel="stylesheet" type="text/css" data-mc-generated="True" />
+        <link href="../Skins/Default/Stylesheets/TextEffects.css" rel="stylesheet" type="text/css" data-mc-generated="True" />
+        <link href="../Skins/Default/Stylesheets/Topic.css" rel="stylesheet" type="text/css" data-mc-generated="True" />
+        <link href="../Skins/Default/Stylesheets/Components/Styles.css" rel="stylesheet" type="text/css" data-mc-generated="True" />
+        <link href="../Skins/Default/Stylesheets/Components/Tablet.css" rel="stylesheet" type="text/css" data-mc-generated="True" />
+        <link href="../Skins/Default/Stylesheets/Components/Mobile.css" rel="stylesheet" type="text/css" data-mc-generated="True" />
+        <link href="../Skins/Default/Stylesheets/Components/Print.css" rel="stylesheet" type="text/css" data-mc-generated="True" /><title>Using the Application Object</title>
+        <link href="Resources/Stylesheets/WebStyles.css" rel="stylesheet" type="text/css" />
+        <meta name="copyright" content="Seagull Scientific, LLC" />
+        <script src="../Resources/Scripts/jquery.min.js" type="text/javascript">
+        </script>
+        <script src="../Resources/Scripts/purify.min.js" type="text/javascript" defer="defer">
+        </script>
+        <script src="../Resources/Scripts/require.min.js" type="text/javascript" defer="defer">
+        </script>
+        <script src="../Resources/Scripts/require.config.js" type="text/javascript" defer="defer">
+        </script>
+        <script src="../Resources/Scripts/foundation.min.js" type="text/javascript" defer="defer">
+        </script>
+        <script src="../Resources/Scripts/plugins.min.js" type="text/javascript" defer="defer">
+        </script>
+        <script src="../Resources/Scripts/MadCapAll.js" type="text/javascript" defer="defer">
+        </script>
+    </head>
+    <body>
+        <p class="MCWebHelpFramesetLink MCWebHelpFramesetLinkTop"><a href="../ActiveX.htm#Using_Application_Object.htm">Open topic with navigation</a>
+        </p>
+        <table class="TopicHeaderTable" cellspacing="0">
+            <tr>
+                <td>
+                    <h1>Using the Application Object</h1>
+                </td>
+            </tr>
+        </table>
+        <p>The <span class="Code"><a href="Application_Object.htm">BarTender.Application</a></span> object represents the complete BarTender application. It is a top-level object in the ActiveX API, which means that all programs that are written with ActiveX Automation rely on the print functionality that is contained within the <span class="Code">Application</span> object. </p>
+        <p>The <span class="Code">Application</span> object provides basic BarTender functionality, and you can use it to control the visibility of the BarTender user interface, run a command line, save BarTender documents, and exit the <span class="Code">bartend.exe</span> process. It can also be used to set application-wide settings.</p>
+        <table class="Note">
+            <tr>
+                <td>
+                    <p>
+                        <img src="Resources/Images/Information.png" />
+                    </p>
+                </td>
+                <td>
+                    <p class="Note">We recommend that you use the fully qualified names of BarTender objects, as shown in all examples in this help documentation. If you prefer to use the shorter form of the names, you can add a VB.NET <span class="Code">Imports BarTender</span> or a C# <span class="Code">using BarTender</span> command to your program. However, when you use C#, you must still fully qualify references to an Application class as either <span class="Code">BarTender.Application</span> or <span class="Code">System.Windows.Forms.Application</span>.</p>
+                </td>
+            </tr>
+        </table>
+        <p>The following example shows the minimum  code that is necessary to create an instance of BarTender and exit the BarTender process.</p>
+        <div>
+            <h3><a targets="Sample26" href="javascript:void(0)" class="MCToggler MCTogglerHead MCTogglerHotSpot MCToggler_Open toggler MCTogglerHotSpot_ MCHotSpotImage" data-mc-targets="Sample26"><img class="MCToggler_Image_Icon" src="../Skins/Default/Stylesheets/Images/transparent.gif" height="13" width="16" alt="Closed" data-mc-alt2="Open" />In VB.NET</a>
+            </h3>
+            <div style="display: none;" data-mc-target-name="Sample26">
+                <div class="Example">
+                    <p class="Indent1"><span class="Green">'Declare a BarTender application variable</span>
+                    </p>
+                    <p class="Indent1"><span class="Blue">Dim</span> btApp <span class="Blue">As</span> BarTender.Application </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Create a new instance of BarTender</span>
+                    </p>
+                    <p class="Indent1">btApp = <span class="Blue">New</span> BarTender.Application</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Exit the BarTender application</span>
+                    </p>
+                    <p class="Indent1">btApp.Quit(BarTender.BtSaveOptions.btDoNotSaveChanges)</p>
+                </div>
+            </div>
+        </div>
+        <div>
+            <h3><a targets="Sample21" href="javascript:void(0)" class="MCToggler MCTogglerHead MCTogglerHotSpot MCToggler_Open toggler MCTogglerHotSpot_ MCHotSpotImage" data-mc-targets="Sample21"><img class="MCToggler_Image_Icon" src="../Skins/Default/Stylesheets/Images/transparent.gif" height="13" width="16" alt="Closed" data-mc-alt2="Open" />In C#</a>
+            </h3>
+            <div style="display: none;" data-mc-target-name="Sample21">
+                <div class="Example">
+                    <p class="Indent1"><span class="Green">// Declare a BarTender application variable </span>
+                    </p>
+                    <p class="Indent1">BarTender.Application btApp; </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Create a new instance of BarTender </span>
+                    </p>
+                    <p class="Indent1">btApp = <span class="Blue">new</span> BarTender.Application();</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Exit the BarTender application</span>
+                    </p>
+                    <p class="Indent1">btApp.Quit(BarTender.BtSaveOptions.btDoNotSaveChanges);</p>
+                </div>
+            </div>
+        </div>
+        <p>In some cases, you  want to use a BarTender application that is already running on your computer. In this scenario, you must retrieve the instance of the application that is running so that you can use it. The  following example shows the minimum  code that is necessary to retrieve an already running instance of BarTender and exit the BarTender process:</p>
+        <div>
+            <h3><a targets="Sample22" href="javascript:void(0)" class="MCToggler MCTogglerHead MCTogglerHotSpot MCToggler_Open toggler MCTogglerHotSpot_ MCHotSpotImage" data-mc-targets="Sample22"><img class="MCToggler_Image_Icon" src="../Skins/Default/Stylesheets/Images/transparent.gif" height="13" width="16" alt="Closed" data-mc-alt2="Open" />In VB.NET</a>
+            </h3>
+            <div style="display: none;" data-mc-target-name="Sample22">
+                <div class="Example">
+                    <p class="Indent1"><span class="Green">'Declare a BarTender application variable</span>
+                    </p>
+                    <p class="Indent1"><span class="Blue">Dim</span> btApp <span class="Blue">As</span> BarTender.Application </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Retrieve an existing instance of BarTender</span>
+                    </p>
+                    <p class="Indent1">btApp = GetObject(, <span class="Gray">"BarTender.Application"</span>)</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Exit the BarTender application</span>
+                    </p>
+                    <p class="Indent1">btApp.Quit(BarTender.BtSaveOptions.btDoNotSaveChanges)</p>
+                </div>
+            </div>
+        </div>
+        <div>
+            <h3><a targets="Sample23" href="javascript:void(0)" class="MCToggler MCTogglerHead MCTogglerHotSpot MCToggler_Open toggler MCTogglerHotSpot_ MCHotSpotImage" data-mc-targets="Sample23"><img class="MCToggler_Image_Icon" src="../Skins/Default/Stylesheets/Images/transparent.gif" height="13" width="16" alt="Closed" data-mc-alt2="Open" />In C#</a>
+            </h3>
+            <div style="display: none;" data-mc-target-name="Sample23">
+                <div class="Example">
+                    <p class="Indent1"><span class="Green">// Retrieve an existing instance of BarTender</span>
+                    </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Store this instance as an object variable in C#</span>
+                    </p>
+                    <p class="Indent1"><span class="Blue">object</span> btObject = System.Runtime.InteropServices.Marshal.GetActiveObject(<span class="Gray">"BarTender.Application"</span>);</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Convert the object variable to a BarTender application variable</span>
+                    </p>
+                    <p class="Indent1">BarTender.Application btApp = btObject <span class="Blue">as</span> BarTender.Application;</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Exit the BarTender application</span>
+                    </p>
+                    <p class="Indent1">btApp.Quit(BarTender.BtSaveOptions.btDoNotSaveChanges);</p>
+                </div>
+            </div>
+        </div>
+        <p>By default, the <span class="Code">Application</span> object runs a BarTender process in the background without being seen by a user. However, sometimes you want to view and interact with the BarTender user interface. The following example shows how to view the user interface by using the <a href="Visible_Property.htm"><span class="Code">Application.Visible</span></a> property and then exit the application.</p>
+        <div>
+            <h3><a targets="Sample24" href="javascript:void(0)" class="MCToggler MCTogglerHead MCTogglerHotSpot MCToggler_Open toggler MCTogglerHotSpot_ MCHotSpotImage" data-mc-targets="Sample24"><img class="MCToggler_Image_Icon" src="../Skins/Default/Stylesheets/Images/transparent.gif" height="13" width="16" alt="Closed" data-mc-alt2="Open" />In VB.NET</a>
+            </h3>
+            <div style="display: none;" data-mc-target-name="Sample24">
+                <div class="Example">
+                    <p class="Indent1"><span class="Green">'Declare a BarTender application variable</span>
+                    </p>
+                    <p class="Indent1"><span class="Blue">Dim</span> btApp <span class="Blue">As</span> BarTender.Application </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Create a new instance of BarTender variable</span>
+                    </p>
+                    <p class="Indent1">btApp = <span class="Blue">New</span> BarTender.Application</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'Set the BarTender application visible</span>
+                    </p>
+                    <p class="Indent1">btApp.Visible = <span class="Blue">True</span></p>
+                    <p />
+                    <p class="Indent1"><span class="Green">'End the BarTender process </span>
+                    </p>
+                    <p class="Indent1">btApp.Quit(BarTender.BtSaveOptions.btDoNotSaveChanges)</p>
+                </div>
+            </div>
+        </div>
+        <div>
+            <h3><a targets="Sample25" href="javascript:void(0)" class="MCToggler MCTogglerHead MCTogglerHotSpot MCToggler_Open toggler MCTogglerHotSpot_ MCHotSpotImage" data-mc-targets="Sample25"><img class="MCToggler_Image_Icon" src="../Skins/Default/Stylesheets/Images/transparent.gif" height="13" width="16" alt="Closed" data-mc-alt2="Open" />In C#</a>
+            </h3>
+            <div style="display: none;" data-mc-target-name="Sample25">
+                <div class="Example">
+                    <p class="Indent1"><span class="Green">// Declare a BarTender application variable </span>
+                    </p>
+                    <p class="Indent1">BarTender.Application btApp; </p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Create a new instance of BarTender </span>
+                    </p>
+                    <p class="Indent1">btApp = <span class="Blue">new</span> BarTender.Application();</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// Set the BarTender application visible</span>
+                    </p>
+                    <p class="Indent1">btApp.Visible = <span class="Blue">true</span>;</p>
+                    <p />
+                    <p class="Indent1"><span class="Green">// End the BarTender process </span>
+                    </p>
+                    <p class="Indent1">btApp.Quit(BarTender.BtSaveOptions.btDoNotSaveChanges);</p>
+                </div>
+            </div>
+        </div>
+        <p>You can use other properties, methods, and objects of the <a href="Application_Object.htm"><span class="Code">Application</span></a> object  to do the following:</p>
+        <ul>
+            <li>
+                <p class="ListItem">Access information about your licensed copy of BarTender by using the <span class="Code"><a href="Edition_Property.htm">Application.Edition</a></span> and <span class="Code"><a href="Version_Property.htm">Application.Version</a></span> properties.</p>
+            </li>
+            <li>
+                <p class="ListItem">Access other objects in the BarTender hierarchy.</p>
+            </li>
+            <li>
+                <p class="ListItem">Save all open documents by using the <a href="Save_Method_(Application).htm"><span class="Code">Application.Save</span></a> method.</p>
+            </li>
+            <li>
+                <p class="ListItem">Manage the appearance of the BarTender application window by using the <a href="Window_Object.htm"><span class="Code">Window</span></a> object.</p>
+            </li>
+            <li>
+                <p class="ListItem">Export a printer code template by using the <a href="PrinterCodeTemplate_Object.htm"><span class="Code">PrinterCodeTemplate</span></a> object.</p>
+            </li>
+        </ul>
+        <p>For a complete list of properties, methods, and events that are available, refer to  <a href="Application_Object.htm"><b>Application Object</b></a>.</p>
+        <p><b>Related Topics</b>
+        </p>
+        <ul class="RelatedTopics">
+            <li><a class="RelatedTopic" href="Using_Format_Object.htm">Using the Format Object</a>
+            </li>
+            <li><a class="RelatedTopic" href="Using_Window_Object.htm">Using the Window Object</a>
+            </li>
+        </ul>
+        <p>&#160;</p>
+    </body>
+</html>

@@ -30,6 +30,13 @@ class PrintBackend(ABC):
         """
 
     @abstractmethod
+    def render_preview(self, values: dict[str, str], out_path: str) -> str:
+        """用给定字段值渲染一张预览图（PNG）到 out_path，返回实际文件路径。
+
+        调用前必须先 open()。用于打印前的视觉核对，不需要真实打印机。
+        """
+
+    @abstractmethod
     def close(self) -> None:
         """关闭模板并释放后端资源。可重复调用。"""
 

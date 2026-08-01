@@ -1,0 +1,122 @@
+<html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=Iso-8859-1" />
+    <meta http-equiv="PICS-Label" content="(PICS-1.1 &quot;http://www.rsac.org/ratingsv01.html&quot; l gen true comment &quot;RSACi North America Server&quot; by &quot;Inet@microsoft.com&quot; for &quot;http://support.microsoft.com&quot; on &quot;1998.02.17T12:28-0800&quot; r (n 0 s 0 v 0 l 0))" />
+    <meta name="ms.locale" content="en" />
+    <meta name="KBArea" content="_IKkbbogus kbAudDeveloper kbOLESearch kbSDKPlatform kbSDKPlatformSearch kbSDKSearch kbWin32SDKSearch" />
+    <meta name="KBID" content="172314" />
+    <meta name="Description" content="A RPC_E_WRONG_THREAD error occurs when a thread calls via an interface pointer which is for a proxy object that does not belong to the thread's apartment." />
+    <meta name="KBCreate" content="8/1/1997" />
+    <meta name="KBModify" content="7/11/2005" />
+    <meta name="Keywords" content="kbDCOM kberrmsg kbinfo KB172314" />
+    <meta name="RPTProduct" content="5008" />
+    <meta name="Audiences" content="" />
+    <meta name="Revision Type" content="Minor" />
+    <meta name="Technical Level" content="" />
+    <title>INFO: Explanation of RPC_E_WRONG_THREAD Error (172314)</title>
+    <link rel="stylesheet" type="text/css" href="/data/misc/kb/kb.css" />
+  </head>
+  <body>
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr>
+        <td valign="top">
+          <table border="0" cellpadding="0" cellspacing="0" width="95%">
+            <tr>
+              <td>
+                <table class="pagetext">
+                  <tr>
+                    <td>
+                      <h1 class="article_title">INFO: Explanation of RPC_E_WRONG_THREAD Error (172314)</h1>
+                      <hr />
+                      <br />The information in this article applies to:<br /><br /><ul class="appliesto_list"><li class="appliesto_listitem">Microsoft OLE Libraries, when used with:<ul class="appliesto_list"><li class="appliesto_listitem">Microsoft Platform Software Development Kit (SDK) 1.0</li></ul></li></ul><hr /><div class="notice_section">This article was previously published under Q172314</div><div class="summary_section"><H2>SUMMARY</H2>
+A RPC_E_WRONG_THREAD error occurs when a thread calls via an interface
+pointer which is for a proxy object that does not belong to the thread's
+apartment.
+</div><div class="moreinformation_section"><H2>MORE INFORMATION</H2>
+See the REFERENCES section at the bottom of this article for more
+information on the workings of the COM threading models. Briefly, an
+interface pointer held by a client thread can be of one of the following
+types:<br /><br /><ul class="comp"><li>A direct pointer to the object. In this case, the object is in the same
+   apartment as the client thread. Also, no system (COM) provided code is
+   in between the caller and the callee.
+ -or-<br /><br /></li><li>A pointer to a proxy. In this case, the object is in a different
+   apartment from the client thread. Also, system (COM) provided code sits
+   in between the caller and the callee.</li></ul>
+
+Whether the client has one type of pointer or the other is dependent on
+such factors as whether the object is in-process or out-of-process, and if
+the object is in-process, whether the threading model of the object is
+compatible with the apartment model of the calling thread. See the article
+in the REFERENCES section below for more information.<br /><br />
+
+When a proxy object is created, it is associated with the apartment that
+creates it. If a pointer to a proxy object is somehow passed to a thread
+which does not belong to the apartment (e.g., via a shared global
+variable), and if this thread then calls through this pointer, the call
+returns a RPC_E_WRONG_THREAD error. COM returns this error because the
+proxy object is invalid for a thread that does not belong to the apartment
+that created the proxy object. The following is also an error. One
+apartment holds a direct pointer to the object. It then transfers the
+pointer to another apartment via a global variable (without marshaling).
+The second apartment calls through this pointer. This call is indeed in
+error. However, COM has no way of detecting this unlike the proxy case.<br /><br />
+
+The correct way of transferring an interface pointer (either a direct
+pointer or a proxy pointer) from one apartment to another is via COM's
+marshaling mechanism. The source apartment can call
+CoMarshalInterThreadInterfaceInStream() to marshal the interface pointer to
+a shared (global) stream. The destination apartment can unmarshal this
+interface pointer by calling CoGetInterfaceAndReleaseStream(). This action
+creates a proxy that is valid for the destination apartment. Note that
+COM's proxy objects are "smart" enough to avoid the problem of "proxy
+chaining." That is, if apartment A marshals an interface pointer to
+apartment B, and if B marshals the same to C, the proxy object that is
+created in C is directly connected to the stub in A. Therefore, when C
+calls through the proxy pointer it is calling A directly and B is not in
+the picture. COM also prevents the "circular" interface-passing problem.
+That is, if A marshals to B and B marshals to C, and C then marshals to A,
+then the resultant pointer in A is a direct pointer, not a proxy pointer.<br /><br /><strong>NOTE</strong>: The RPC_E_WRONG_THREAD error can occur even when all the COM rules
+are followed and no interfaces are explicitly passed between apartments
+without marshaling. This happens when an in-process object aggregates with
+the system provided Free Threaded Marshaler (FTM) by calling
+CoCreateFreeThreadMarshaler and also holds pointers to COM proxies.
+Typically in-process objects that can be marked as Threading Model "Both"
+use the FTM. When an interface pointer to such an object is marshaled from
+one apartment to another, a direct pointer to the object is passed (no
+proxy/stub is created). This is the benefit of using the FTM, however this
+also results in an RPC_E_WRONG_THREAD error if the object's implementation
+tries to call through the proxy pointer on a non-original-apartment thread.
+There is no good workaround to this problem, in general, objects that use
+the FTM should not themselves be clients of out-of-apartment COM servers.
+If they need to do this infrequently, then they should pass the call to a
+forwarding object that does not use the FTM. If they do this frequently,
+they should just mark themselves "free" or "both" and not use the FTM. When
+an interface pointer to such an object is marshaled to another apartment,
+the system creates the proxys/stub code needed as the object no longer
+aggregates with the FTM.
+</div><div class="references_section"><H2>REFERENCES</H2>
+For additional information, please see the following article in the
+Microsoft Knowledge Base:
+<div class="indent"><p><a class="kblink" href="/data/misc/KB/EN-US/150/777.htm">150777</a> INFO: Descriptions and Workings of OLE Threading Models
+</p></div></div><!--******************* PUBLIC INFO SECTION ***********************--><hr /><table class="docinfo"><tr><th align="left" width="20%" class="docinfolabel">Modification Type:</th><td class="docinfodata">Minor</td><th align="left" width="20%" class="docinfolabel">Last Reviewed:</th><td class="docinfodata">7/11/2005</td></tr><tr><th align="left" width="20%" class="docinfolabel">Keywords:</th><td class="docinfodata" colspan="5">kbDCOM kberrmsg kbinfo KB172314</td></tr></table><hr /><!--********************* END PUBLIC INFO SECTION ***********************--></td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+          <div class="copyright">
+            <center>
+              <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                <tr>
+                  <td valign="top">
+                    <center>©2004 Microsoft Corporation. All rights reserved.</center>
+                  </td>
+                </tr>
+              </table>
+            </center>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
