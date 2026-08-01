@@ -216,6 +216,7 @@ class MainWindow(QMainWindow):
             self.setCentralWidget(scroll)
             self.setMinimumSize(min(940, screen.width()), min(470, screen.height()))
         else:
+            self.setCentralWidget(self._root_panel)
             self.setMinimumSize(min(1080, screen.width()), min(700, screen.height()))
         self.resize(min(1440, int(screen.width() * .90)),
                     min(900, int(screen.height() * .90)))

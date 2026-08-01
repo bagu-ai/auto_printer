@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QRect
+from PySide6.QtWidgets import QApplication, QScrollArea
 
 from label_printer.core.mock_backend import MockBackend
 from label_printer.ui.main_window import MainWindow
@@ -12,6 +13,37 @@ def qapp():
     app = QApplication.instance() or QApplication([])
     apply_theme(app)
     return app
+
+
+class FakeScreen:
+    """模拟指定可用区域的屏幕（离屏默认 800x600 只会走小屏分支）。"""
+
+    def __init__(self, w, h):
+        self._rect = QRect(0, 0, w, h)
+
+    def availableGeometry(self):
+        return self._rect
+
+
+def test_normal_screen_sets_central_widget(qapp, monkeypatch):
+    """普通屏：root 直接是 centralWidget（修复漏 setCentralWidget 导致白屏）。"""
+    monkeypatch.setattr(QApplication, "primaryScreen",
+                        staticmethod(lambda: FakeScreen(1920, 1040)))
+    win = MainWindow(MockBackend, MockBackend.name)
+    assert win.centralWidget() is win._root_panel
+    win.close()
+
+
+def test_compact_screen_wraps_in_scroll_area(qapp, monkeypatch):
+    """小屏（1366x768 @150% 逻辑约 910x480）：滚动容器保证打印条可达。"""
+    monkeypatch.setattr(QApplication, "primaryScreen",
+                        staticmethod(lambda: FakeScreen(910, 480)))
+    win = MainWindow(MockBackend, MockBackend.name)
+    central = win.centralWidget()
+    assert isinstance(central, QScrollArea)
+    assert central.widget() is win._root_panel
+    assert win.minimumHeight() <= 480  # 窗口本身不得超出可用高度
+    win.close()
 
 
 def make_book(path, rows=20):
