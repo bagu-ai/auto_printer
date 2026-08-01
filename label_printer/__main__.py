@@ -4,6 +4,16 @@ from __future__ import annotations
 import argparse
 import sys
 
+# pywin32 加载顺序坑：若 win32print 在主线程先导入，之后其他线程再 import
+# win32com 会因 pywintypes 初始化时序报「DLL load failed …找不到指定的程序」
+# （仅源码运行环境如此，PyInstaller 打包不受影响）。这里统一先加载 win32com。
+try:
+    import pywintypes  # noqa: F401
+    import win32com.client  # noqa: F401
+    import win32print  # noqa: F401
+except Exception:
+    pass  # 无 pywin32 时由后端给出中文提示；mock 模式也不需要
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="标签自动打印工具")
