@@ -18,6 +18,15 @@ BT_SAVE_DO_NOT_SAVE = 0  # BtSaveOptions.btSaveDoNotSaveChanges
 # BtPrintResult 枚举（0=成功）
 BT_PRINT_SUCCESS = 0
 
+# IBtFormat 的 ActiveX DISPID（Print=48 / Preview=53）。
+# 已在本机 BarTender 12.0 类型库与真实调用验证；2016 ActiveX 官方文档的接口
+# 顺序一致，但仍需在客户的 2016 主机做最终兼容验证。
+# 两个方法最后一个 Messages 参数均为 [out] IBtMessages**；pywin32 动态 Dispatch
+# 不能给这个参数传 None，必须用 InvokeTypes 让它自动创建 out 参数。
+DISPID_PRINT = 48
+DISPID_EXPORT_PRINT_PREVIEW = 53
+VT_OUT_DISPATCH = 16393  # pythoncom.VT_BYREF | pythoncom.VT_DISPATCH
+
 
 def _import_win32com():
     try:
@@ -122,6 +131,49 @@ class BarTenderBackend(PrintBackend):
             self._format = None
             raise BackendError(f"打不开模板文件：\n{template_path}\n\n原始错误：{exc}") from exc
 
+    def _invoke_print(self):
+        """调用含 [out] Messages 的 Format.Print。
+
+        动态 Dispatch 直接传 None 会报「参数 4 类型不匹配」；这里按 ActiveX
+        类型库显式描述输入/输出类型，让 pywin32 返回 (BtPrintResult, Messages)。
+        """
+        import pythoncom  # noqa: PLC0415
+
+        return self._format._oleobj_.InvokeTypes(
+            DISPID_PRINT, 0, pythoncom.DISPATCH_METHOD,
+            (pythoncom.VT_I4, 0),
+            (
+                (pythoncom.VT_BSTR, pythoncom.PARAMFLAG_FIN),
+                (pythoncom.VT_BOOL, pythoncom.PARAMFLAG_FIN),
+                (pythoncom.VT_I4, pythoncom.PARAMFLAG_FIN),
+                (VT_OUT_DISPATCH, pythoncom.PARAMFLAG_FOUT),
+            ),
+            "", True, -1,
+        )
+
+    def _invoke_preview(self, out_dir: str):
+        """调用含 [out] Messages 的 ExportPrintPreviewToImage。"""
+        import pythoncom  # noqa: PLC0415
+
+        return self._format._oleobj_.InvokeTypes(
+            DISPID_EXPORT_PRINT_PREVIEW, 0, pythoncom.DISPATCH_METHOD,
+            (pythoncom.VT_I4, 0),
+            (
+                (pythoncom.VT_BSTR, pythoncom.PARAMFLAG_FIN),
+                (pythoncom.VT_BSTR, pythoncom.PARAMFLAG_FIN),
+                (pythoncom.VT_BSTR, pythoncom.PARAMFLAG_FIN),
+                (pythoncom.VT_I4, pythoncom.PARAMFLAG_FIN),
+                (pythoncom.VT_I4, pythoncom.PARAMFLAG_FIN),
+                (pythoncom.VT_I4, pythoncom.PARAMFLAG_FIN),
+                (pythoncom.VT_I4, pythoncom.PARAMFLAG_FIN),
+                (pythoncom.VT_BOOL, pythoncom.PARAMFLAG_FIN),
+                (pythoncom.VT_BOOL, pythoncom.PARAMFLAG_FIN),
+                (VT_OUT_DISPATCH, pythoncom.PARAMFLAG_FOUT),
+            ),
+            out_dir, "label_%PageNumber%.png", "png",
+            6, 300, 16777215, 2, False, False,
+        )
+
     def print_label(self, values: dict[str, str], copies: int = 1) -> None:
         if self._format is None:
             raise BackendError("内部错误：尚未打开模板就调用打印")
@@ -130,8 +182,7 @@ class BarTenderBackend(PrintBackend):
                 self._set_field(name, value)
             setup = self._format.PrintSetup
             setup.IdenticalCopiesOfLabel = max(1, int(copies))
-            # Format.Print(作业名, 等提交spooler, 超时ms, 消息输出) → (BtPrintResult, Messages)
-            ret = self._format.Print("", True, -1, None)
+            ret = self._invoke_print()
             result = ret[0] if isinstance(ret, tuple) else ret
             if result != BT_PRINT_SUCCESS:
                 detail = _messages_text(ret) or f"BtPrintResult={result}"
@@ -152,10 +203,7 @@ class BarTenderBackend(PrintBackend):
         try:
             for name, value in values.items():
                 self._set_field(name, value)
-            # (目录, 文件名模板, 类型, 颜色=24位, DPI=300, 背景=白, 保存选项=2, 含边距=False, 含边框=False, 消息)
-            ret = self._format.ExportPrintPreviewToImage(
-                out_dir, "label_%PageNumber%.png", "png",
-                6, 300, 16777215, 2, False, False, None)
+            ret = self._invoke_preview(out_dir)
             result = ret[0] if isinstance(ret, tuple) else ret
             if result != BT_PRINT_SUCCESS:
                 detail = _messages_text(ret) or f"BtPrintResult={result}"
