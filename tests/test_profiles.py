@@ -38,6 +38,45 @@ def test_save_and_load_roundtrip(tmp_path):
     assert loaded.mapping_for("不存在") is None
 
 
+def test_prefix_suffix_roundtrip(tmp_path):
+    """前缀/后缀随 profile 保存并恢复。"""
+    profile = Profile(
+        template_path=TPL,
+        mappings=[
+            FieldMapping("编号", SOURCE_COLUMN, "发货新编号", prefix="编号："),
+            FieldMapping("粒径", SOURCE_COLUMN, "发货粒径", prefix="粒径：", suffix="（实测）"),
+            FieldMapping("备注", SOURCE_FIXED, "样品", suffix="·勿食用"),
+        ])
+    save_profile(profile, tmp_path)
+    loaded = load_profile(TPL, tmp_path)
+    assert loaded.mapping_for("编号").prefix == "编号："
+    assert loaded.mapping_for("编号").suffix == ""
+    assert loaded.mapping_for("粒径").prefix == "粒径："
+    assert loaded.mapping_for("粒径").suffix == "（实测）"
+    assert loaded.mapping_for("备注").suffix == "·勿食用"
+
+
+def test_json_without_prefix_suffix_loads_defaults(tmp_path):
+    """v1.2 及更早的 profile（无 prefix/suffix 键）按空前/后缀加载。"""
+    path = profile_path_for(TPL, tmp_path)
+    path.write_text(
+        '{"template_path": "%s", "printer": "", '
+        '"mappings": [{"field": "编号", "source": "column", "value": "发货新编号"}]}'
+        % TPL.replace("\\", "\\\\"),
+        encoding="utf-8")
+    loaded = load_profile(TPL, tmp_path)
+    m = loaded.mapping_for("编号")
+    assert m.prefix == "" and m.suffix == ""
+
+
+def test_render_composes_prefix_suffix():
+    m = FieldMapping("编号", SOURCE_COLUMN, "发货新编号", prefix="编号：", suffix="（新）")
+    assert m.render("TB-71717") == "编号：TB-71717（新）"
+    assert FieldMapping("编号", SOURCE_COLUMN, "发货新编号").render("TB-1") == "TB-1"
+    # 空值也照拼：前缀本身就是提示信息（预检会对空值另行告警）
+    assert FieldMapping("编号", SOURCE_COLUMN, "x", prefix="编号：").render("") == "编号："
+
+
 def test_load_missing_returns_none(tmp_path):
     assert load_profile(r"C:\模板\nope.btw", tmp_path) is None
 
@@ -86,6 +125,14 @@ def test_guess_mapping():
     g = guess_mapping("粒径", cols)
     assert g.source == SOURCE_COLUMN and g.value == "发货粒径"
     assert guess_mapping("二维码", cols).source == SOURCE_NONE
+
+
+def test_guess_mapping_strips_trailing_colons():
+    """数据源名带全角/半角冒号尾巴（如「香型：」）也能自动匹配列。"""
+    cols = ["序号", "客户香型", "发货粒径"]
+    assert guess_mapping("香型：", cols).value == "客户香型"
+    assert guess_mapping("粒径:", cols).value == "发货粒径"
+    assert guess_mapping("：", cols).source == SOURCE_NONE
 
 
 # ---------- validate_jobs ----------

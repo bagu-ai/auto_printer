@@ -392,14 +392,17 @@ class MainWindow(QMainWindow):
         mlay = QVBoxLayout(mapping_tab)
         mlay.setContentsMargins(10, 10, 10, 10)
         mlay.setSpacing(8)
-        mlay.addLayout(self._section_title("字段映射", "模板字段 ← Excel 列 / 固定文本"))
-        self.map_table = QTableWidget(0, 3)
-        self.map_table.setHorizontalHeaderLabels(["模板字段", "取值来源", "固定文本 / 列名"])
+        mlay.addLayout(self._section_title("字段映射", "模板字段 ← Excel 列 / 固定文本，可加前后缀"))
+        self.map_table = QTableWidget(0, 5)
+        self.map_table.setHorizontalHeaderLabels(
+            ["模板字段", "取值来源", "固定文本 / 列名", "前缀", "后缀"])
         self.map_table.setAlternatingRowColors(True)
         self.map_table.verticalHeader().setDefaultSectionSize(36)
         self.map_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.map_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.map_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.map_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.map_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         mlay.addWidget(self.map_table)
         self.side_tabs.addTab(mapping_tab, "字段映射")
         self.main_splitter.addWidget(self.side_tabs)
@@ -753,6 +756,11 @@ class MainWindow(QMainWindow):
                 combo.addItem(col)
             edit = QLineEdit()
             edit.setPlaceholderText("选择 Excel 列，或选固定文本后在此输入")
+            # 前缀/后缀：加到每一行该字段取值上的固定文字（如「编号：」）
+            prefix_edit = QLineEdit(mapping.prefix)
+            suffix_edit = QLineEdit(mapping.suffix)
+            prefix_edit.setPlaceholderText("（无）")
+            suffix_edit.setPlaceholderText("（无）")
 
             if mapping.source == SOURCE_COLUMN and mapping.value in columns:
                 combo.setCurrentText(mapping.value)
@@ -765,17 +773,26 @@ class MainWindow(QMainWindow):
                 combo.setCurrentText(OPTION_NONE)
                 edit.setText("")
                 edit.setReadOnly(True)
+                # 留空的字段不会被填充，前后缀无意义，禁用以免误解
+                prefix_edit.setEnabled(False)
+                suffix_edit.setEnabled(False)
 
             combo.currentTextChanged.connect(
-                lambda text, e=edit: self._mapping_source_changed(text, e))
+                lambda text, e=edit, p=prefix_edit, s=suffix_edit:
+                self._mapping_source_changed(text, e, p, s))
             combo.currentTextChanged.connect(lambda _text: self._schedule_preview())
             edit.textChanged.connect(lambda _text: self._schedule_preview())
+            prefix_edit.textChanged.connect(lambda _text: self._schedule_preview())
+            suffix_edit.textChanged.connect(lambda _text: self._schedule_preview())
             self.map_table.setCellWidget(r, 1, combo)
             self.map_table.setCellWidget(r, 2, edit)
+            self.map_table.setCellWidget(r, 3, prefix_edit)
+            self.map_table.setCellWidget(r, 4, suffix_edit)
         self.map_table.resizeColumnsToContents()
 
     @staticmethod
-    def _mapping_source_changed(text: str, edit: QLineEdit):
+    def _mapping_source_changed(text: str, edit: QLineEdit,
+                                prefix_edit: QLineEdit, suffix_edit: QLineEdit):
         if text == OPTION_FIXED:
             edit.setReadOnly(False)
             edit.setPlaceholderText("输入固定文本")
@@ -786,6 +803,9 @@ class MainWindow(QMainWindow):
         else:
             edit.setReadOnly(True)
             edit.setText(text)
+        has_source = text != OPTION_NONE
+        prefix_edit.setEnabled(has_source)
+        suffix_edit.setEnabled(has_source)
 
     def _auto_map(self):
         if self.template_fields:
@@ -797,17 +817,20 @@ class MainWindow(QMainWindow):
             field_name = self.map_table.item(r, 0).text()
             combo: QComboBox = self.map_table.cellWidget(r, 1)
             edit: QLineEdit = self.map_table.cellWidget(r, 2)
+            prefix_edit: QLineEdit = self.map_table.cellWidget(r, 3)
+            suffix_edit: QLineEdit = self.map_table.cellWidget(r, 4)
+            prefix, suffix = prefix_edit.text(), suffix_edit.text()
             src_text = combo.currentText()
             if src_text == OPTION_NONE:
                 out.append(FieldMapping(field_name, SOURCE_NONE, ""))
             elif src_text == OPTION_FIXED:
-                out.append(FieldMapping(field_name, SOURCE_FIXED, edit.text()))
+                out.append(FieldMapping(field_name, SOURCE_FIXED, edit.text(), prefix, suffix))
             else:
-                out.append(FieldMapping(field_name, SOURCE_COLUMN, src_text))
+                out.append(FieldMapping(field_name, SOURCE_COLUMN, src_text, prefix, suffix))
         return out
 
     def _values_for_row(self, r: int) -> dict[str, str]:
-        """按当前映射计算某一行的字段值。"""
+        """按当前映射计算某一行的字段值（含前缀/后缀组合）。"""
         if self.sheet is None:
             return {}
         col_index = {c: i for i, c in enumerate(self.sheet.columns)}
@@ -815,9 +838,9 @@ class MainWindow(QMainWindow):
         values = {}
         for m in self._current_mappings():
             if m.source == SOURCE_COLUMN and m.value in col_index:
-                values[m.field] = row[col_index[m.value]]
+                values[m.field] = m.render(row[col_index[m.value]])
             elif m.source == SOURCE_FIXED:
-                values[m.field] = m.value
+                values[m.field] = m.render(m.value)
         return values
 
     # ---------------------------------------------------------- 预览

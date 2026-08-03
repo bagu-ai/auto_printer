@@ -84,7 +84,22 @@ while not win.template_fields and time.time() - t0 < 20:
     time.sleep(0.1)
 print("[step] template fields:", win.template_fields, flush=True)
 
-win.data_table.selectRow(2)
+# 说明书展示「前缀/后缀」功能：给三个字段加固定前缀，校样与映射图同步呈现
+# （字段名可能带全角冒号尾巴，如「香型：」，按去冒号后的名字匹配；
+#   粒径改映射到短值的「发货粒径」列——「粒径」列带括号备注，加前缀后超出标签）
+for r in range(win.map_table.rowCount()):
+    field_name = win.map_table.item(r, 0).text().strip("：:")
+    if field_name == "粒径":
+        combo = win.map_table.cellWidget(r, 1)
+        if combo.findText("发货粒径") >= 0:
+            combo.setCurrentText("发货粒径")
+    prefix = {"编号": "编号：", "香型": "香型：", "粒径": "粒径："}.get(field_name)
+    if prefix:
+        win.map_table.cellWidget(r, 3).setText(prefix)
+
+# 第 9 行（索引 8）香型为短文本 "Mint"：加前缀后也不会超出标签边界，
+# 说明书插图避免展示文字被裁剪的"残次"效果
+win.data_table.selectRow(8)
 
 # 截图期间彻底停用后台预览刷新（定时器 250ms 后会清掉注入的图）
 win._preview_timer.stop()
@@ -100,8 +115,10 @@ try:
     backend = BarTenderBackend()
     backend.open(win.template_combo.currentData(),
                  win.printer_combo.currentData() or "")
-    shot_path = backend.render_preview(win._values_for_row(2),
-                                       str(OUT / "_preview_src.png"))
+    import tempfile  # noqa: E402
+    shot_path = backend.render_preview(
+        win._values_for_row(8),
+        str(Path(tempfile.mkdtemp(prefix="manual_shot_")) / "_preview_src.png"))
     backend.close()
 finally:
     pythoncom.CoUninitialize()
@@ -124,13 +141,15 @@ while print_bar is not None and print_bar.objectName() != "printBar":
 if print_bar is not None:
     print_bar.grab().save(str(OUT / "print_bar.png"), "PNG")
 
-# 字段映射页
+# 字段映射页（放宽右侧面板，让 5 列内容清晰可读）
 win.side_tabs.setCurrentIndex(1)
+win.main_splitter.setSizes([620, 880])
 wait_ms(app, 400)
 win.side_tabs.grab().save(str(OUT / "mapping_panel.png"), "PNG")
 
 # 运行记录展开状态
 win.side_tabs.setCurrentIndex(0)
+win.main_splitter.setSizes([900, 500])
 win.log_panel.set_expanded(True)
 wait_ms(app, 400)
 win.log_panel.grab().save(str(OUT / "log_panel.png"), "PNG")

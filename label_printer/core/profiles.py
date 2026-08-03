@@ -21,6 +21,12 @@ class FieldMapping:
     field: str                 # 模板字段名（BarTender 命名数据源）
     source: str = SOURCE_NONE  # none / column / fixed
     value: str = ""            # source=column 时是列名；source=fixed 时是固定文本
+    prefix: str = ""           # 加在每行取值前的固定文本（如「编号：」）
+    suffix: str = ""           # 加在每行取值后的固定文本（如「（样品）」）
+
+    def render(self, cell: str) -> str:
+        """最终填充值 = 前缀 + 取值 + 后缀。"""
+        return f"{self.prefix}{cell}{self.suffix}"
 
 
 @dataclass
@@ -63,7 +69,8 @@ def save_profile(profile: Profile, profiles_dir: Path) -> Path:
         "template_path": profile.template_path,
         "printer": profile.printer,
         "mappings": [
-            {"field": m.field, "source": m.source, "value": m.value}
+            {"field": m.field, "source": m.source, "value": m.value,
+             "prefix": m.prefix, "suffix": m.suffix}
             for m in profile.mappings
         ],
     }
@@ -91,6 +98,8 @@ def load_profile(template_path: str, profiles_dir: Path) -> Profile | None:
                 field=m.get("field", ""),
                 source=m.get("source", SOURCE_NONE),
                 value=m.get("value", ""),
+                prefix=m.get("prefix", ""),   # 旧版配置没有这两个键
+                suffix=m.get("suffix", ""),
             )
             for m in data.get("mappings", [])
         ],
@@ -106,12 +115,18 @@ def load_profile(template_path: str, profiles_dir: Path) -> Profile | None:
 
 
 def guess_mapping(field_name: str, columns: list[str]) -> FieldMapping:
-    """按名字自动猜映射：精确匹配 > 包含匹配 > 留空。"""
-    name = field_name.strip()
+    """按名字自动猜映射：精确匹配 > 包含匹配 > 留空。
+
+    匹配前剥掉字段名首尾的空格和冒号——不少模板的数据源名带全角冒号尾巴
+    （如「香型：」「粒径：」），不剥掉就连「客户香型」都匹配不上。
+    """
+    name = field_name.strip().strip("：:").strip()
+    if not name:
+        return FieldMapping(field=field_name, source=SOURCE_NONE)
     if name in columns:
         return FieldMapping(field=field_name, source=SOURCE_COLUMN, value=name)
     for col in columns:
-        if name and (name in col or col in name):
+        if name in col or col in name:
             return FieldMapping(field=field_name, source=SOURCE_COLUMN, value=col)
     return FieldMapping(field=field_name, source=SOURCE_NONE)
 
