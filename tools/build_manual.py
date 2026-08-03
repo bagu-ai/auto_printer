@@ -1,7 +1,7 @@
 """生成客户版《标签自动打印工具 使用说明书》Word + PDF。
 
 用法：python tools/build_manual.py
-输出：docs/标签自动打印工具_使用说明书_v1.2.docx / .pdf
+输出：docs/标签自动打印工具_使用说明书_v1.2.1.docx / .pdf
 依赖：python-docx + 本机 Word（COM 导出 PDF）
 """
 import sys
@@ -154,7 +154,7 @@ def build():
       align=WD_ALIGN_PARAGRAPH.CENTER)
     for _ in range(8):
         doc.add_paragraph()
-    p(doc, "版本：V1.2", size=12, align=WD_ALIGN_PARAGRAPH.CENTER)
+    p(doc, "版本：V1.2.1", size=12, align=WD_ALIGN_PARAGRAPH.CENTER)
     p(doc, "适用模板：60×30mm 中文版 / 英文版标签", size=12,
       align=WD_ALIGN_PARAGRAPH.CENTER)
     p(doc, "2026 年 8 月", size=12, color=GRAY, align=WD_ALIGN_PARAGRAPH.CENTER)
@@ -190,7 +190,7 @@ def build():
     # ---------- 3 安装 ----------
     doc.add_heading("三、安装（只需一次）", 1)
     _steps.reset()
-    step(doc, "把收到的压缩包「标签自动打印工具_v1.2.zip」解压到一个固定位置，"
+    step(doc, "把收到的压缩包「标签自动打印工具_v1.2.1.zip」解压到一个固定位置，"
               "例如 D:\\标签打印\\（不要放在桌面临时文件夹里，以后别移动它）。")
     step(doc, "解压后里面有：标签自动打印工具.exe、「模板」文件夹（内含中文版/英文版 .btw 模板）、使用说明.txt。")
     step(doc, "在 exe 上点右键 →「发送到 → 桌面快捷方式」，以后从桌面双击启动。")
@@ -290,7 +290,9 @@ def build():
          "模板里没有命名数据源，请按第八章给对象起名字；或者模板还在读取中，稍等一两秒。"),
         ("校样显示“生成失败”",
          "看运行记录里的具体原因。常见是模板路径被移动、或 BarTender 正被其他窗口占用（"
-         "先把 BarTender 设计器里打开的同一模板关掉）。"),
+         "先把 BarTender 设计器里打开的同一模板关掉）。如果提示「为第一个参数指定的"
+         "颜色不正确」，说明用的是 V1.2 旧版软件，请换用 V1.2.1 及以上版本（已兼容 "
+         "BarTender 2016）。"),
         ("打印出来的内容不对",
          "先在「标签校样」用 100% 或独立查看核对，再「试打当前行」；不对就调整字段映射"
          "（映射自动保存）。"),
@@ -322,7 +324,7 @@ def build():
     p(doc, "如遇到本说明书未覆盖的问题，请截图（含运行记录）并联系软件提供方。",
       color=GRAY)
 
-    out_docx = ROOT / "docs" / "标签自动打印工具_使用说明书_v1.2.docx"
+    out_docx = ROOT / "docs" / "标签自动打印工具_使用说明书_v1.2.1.docx"
     doc.save(out_docx)
     print("docx:", out_docx)
     return out_docx

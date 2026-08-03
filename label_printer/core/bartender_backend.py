@@ -18,6 +18,12 @@ BT_SAVE_DO_NOT_SAVE = 0  # BtSaveOptions.btSaveDoNotSaveChanges
 # BtPrintResult 枚举（0=成功）
 BT_PRINT_SUCCESS = 0
 
+# BtColors 枚举（12.0 类型库实测）：Mono=0, 16色=1, 256色=2, 24Bit=4, 32Bit=5, 16Bit=6。
+# 前四项（0/1/2/4）从旧版本沿用至今；5/6 是后来追加的。曾误用 6（以为是"24位色"），
+# 在 BarTender 2016 (11.0) 上枚举越界，报「为第一个参数指定的颜色不正确」
+# (DISP_E_EXCEPTION / E_UNEXPECTED)。4 = btColors24Bit 在 2016 与 12.x 上均有效。
+BT_COLORS_24BIT = 4
+
 # IBtFormat.Print 的 ActiveX DISPID（=48）。
 # 已在本机 BarTender 12.0 类型库与真实调用验证；2016 ActiveX 官方文档的接口
 # 顺序一致，但仍需在客户的 2016 主机做最终兼容验证。
@@ -25,6 +31,21 @@ BT_PRINT_SUCCESS = 0
 # 不能给这个参数传 None，必须用 InvokeTypes 让它自动创建 out 参数。
 DISPID_PRINT = 48
 VT_OUT_DISPATCH = 16393  # pythoncom.VT_BYREF | pythoncom.VT_DISPATCH
+
+# 参数个数/类型不匹配的 HRESULT：这类错误只可能意味着「该版本的接口签名不同」，
+# 与模板内容无关，因此可以安全地回退到旧接口再试一次。
+_SIGNATURE_MISMATCH_HRESULTS = frozenset({
+    -2147352561,  # DISP_E_PARAMNOTOPTIONAL「非选择性的参数」
+    -2147352562,  # DISP_E_BADPARAMCOUNT
+    -2147352571,  # DISP_E_TYPEMISMATCH「类型不匹配」
+})
+
+
+def _is_signature_mismatch(exc: Exception) -> bool:
+    hresult = getattr(exc, "hresult", None)
+    if hresult is None and getattr(exc, "args", None):
+        hresult = exc.args[0]
+    return hresult in _SIGNATURE_MISMATCH_HRESULTS
 
 
 def _import_win32com():
@@ -178,7 +199,8 @@ class BarTenderBackend(PrintBackend):
         ExportImage/ExportToFile 是旧 ActiveX 方法，没有 [out] Messages 参数
         （不同于 Print/ExportPrintPreviewToImage），失败表现为抛 COM 异常或不
         生成文件，因此这里的诊断靠异常原文 + 文件存在性检查。回退只在「方法
-        不存在」时发生，真实渲染错误不会被第二个调用掩盖。
+        不存在」或「签名不匹配（参数个数/类型不符）」时发生，真实渲染错误
+        （如色深越界）不会被第二个调用掩盖。
         """
         if self._format is None:
             raise BackendError("内部错误：尚未打开模板就调用预览")
@@ -194,19 +216,35 @@ class BarTenderBackend(PrintBackend):
             # 打印份数与单张设计面导出无关，但旧模板里若保存了多份数，
             # 某些版本会按份数导出多页/多图；统一钳为 1 保证只出单张。
             self._format.PrintSetup.IdenticalCopiesOfLabel = 1
-            export_image = getattr(self._format, "ExportImage", None)
-            if export_image is not None:
-                # (文件, 类型, 24位色, DPI, 覆盖, 背景白, 画标签边框)
-                export_image(output, "png", 6, 300, 2, 16777215, True)
-            else:
-                # BarTender 2016 的旧 ActiveX 接口：导出单张设计面
-                self._format.ExportToFile(output, "png", 6, 300, 2)
+            self._export_label_image(output)
         except Exception as exc:
             raise BackendError(f"生成校样失败：{exc}") from exc
 
         if os.path.exists(output):
             return output
         raise BackendError("生成校样失败：BarTender 未生成图片文件")
+
+    def _export_label_image(self, output: str) -> None:
+        """导出单张标签设计面 PNG，兼容 2016 (11.0) 与 12.x。
+
+        色深统一传 BT_COLORS_24BIT（=4）：该枚举值在各版本中含义一致；
+        不要改成 6——那是 12.x 才追加的 btColors16Bit，2016 上越界报错。
+
+        12.x 的 ExportImage 为 7 参（含背景色/边框）；老版本若方法缺失
+        （getattr 为 None）或参数个数不同（报「非选择性的参数」等签名错误），
+        回退自早期版本即有的 5 参旧接口 ExportToFile。
+        """
+        export_image = getattr(self._format, "ExportImage", None)
+        if export_image is not None:
+            try:
+                # (文件, 类型, 24位色, DPI, 覆盖, 背景白, 画标签边框)
+                export_image(output, "png", BT_COLORS_24BIT, 300, 2, 16777215, True)
+                return
+            except Exception as exc:
+                if not _is_signature_mismatch(exc):
+                    raise  # 真实渲染错误原样上抛，不用旧接口掩盖
+                # 签名不符：落入旧接口再试一次
+        self._format.ExportToFile(output, "png", BT_COLORS_24BIT, 300, 2)
 
     def _set_field(self, name: str, value: str) -> None:
         fmt = self._format
