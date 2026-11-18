@@ -49,3 +49,11 @@ class PrintBackend(ABC):
 
 class BackendError(Exception):
     """后端相关错误（BarTender 未安装、模板打不开、打印失败等），message 面向用户。"""
+
+
+class PrintOutcomeUnknown(BackendError):
+    """当前行可能已经下发；必须核对队列和实物，禁止自动重试。"""
+
+
+class BackendCancelled(BackendError):
+    """操作在提交当前打印命令前取消。"""

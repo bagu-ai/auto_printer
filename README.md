@@ -1,85 +1,104 @@
 # 标签自动打印工具
 
-把 Excel 样品清单拖进窗口，选好 BarTender 模板和「Excel 列 ↔ 模板字段」映射，一键自动打印全部标签。
+将 Excel 清单映射到 BarTender 模板，提供标签校样、打印预检和批量任务提交。真实打印需要 Windows、BarTender Automation / Enterprise、正确的模板和可用的打印机；模拟模式不连接打印机。
 
-## 使用流程（打印工作站）
+## v1.3.3 的行为
 
-1. 把 `标签自动打印工具.exe` 和 `模板` 文件夹放在同一目录（`模板` 里放 `.btw` 文件）
-2. 双击运行（要求本机已装 **BarTender Automation / Enterprise 版**，并接好标签打印机）
-3. 拖入 Excel 清单（.xls / .xlsx）
-   - 自动识别表头行；多工作表文件可选「工作表」
-   - 日期列自动格式化为 `YYYY-MM-DD`（不会打出 `00:00:00`）
-   - 「送样数量」列如 `10g*3瓶` 自动解析为每行默认张数（3 张）
-4. 选择模板（中文版 / 英文版）→ 后台自动读取模板里的命名数据源
-5. 核对「字段映射」：每个模板字段取哪一列（或固定文本、留空）。同名自动匹配，映射按模板自动保存，下次直接用
-6. 在左侧数据工作台选择一行，右侧「标签校样」会自动刷新；可用「适合窗口 / 100% / ±缩放 / 独立查看」按像素核对（BarTender 直接导出 300 DPI 单张标签，不消耗标签纸）
-7. 数据工作台默认显示 10–14 行，可搜索任意列、拖动中间分隔条；运行记录默认收起，失败时自动展开
-8. 勾选要打印的行、修改每行张数
-8. 选打印机（默认用模板里保存的，选择会随映射一起记住）
-9. 点「试打当前行」或「全部打印」——打印前自动**预检**（空值、重复编号、未映射字段）
-10. 每次打印的任务记录保存在日志里，便于查错补打
+- 默认使用提交模式：每行完整设置字段和份数，调用打印接口后检查返回结果，不等待设备完成反馈。直接打开 EXE 与 `启动标签打印.cmd` 使用相同默认模式。
+- BarTender COM 会话在独立子进程内串行运行；父进程提供取消与超时监护。发生错误、断链或超时后停止后续提交。
+- 提交前记录不可变任务快照，逐行写入 JSONL 增量日志；结束后保存 JSON 汇总。无法确定是否已经提交的行标为 `unknown`，不会自动重发。
+- 扫描、校样与打印互斥；清理结束前不启动新任务。关闭 BarTender 使用不保存更改的参数，关闭异常会显示出来。
 
-## 数据存放位置
+`submitted` 仅表示打印接口报告任务已提交，不代表纸张已经输出，也不证明标签内容、份数全部正确。取消不能撤回已经提交到打印队列的任务；异常后必须结合队列和实物确认实际缺少的标签。
 
-| 内容 | 位置 |
+已有现场记录来自一台 Windows / BarTender 2016 R1 / USB001 打印工作站：提交模式四批合计 160 行、258 份均记录为 `submitted`，使用者反馈该模式可以完成任务。该记录不等于逐张实物验收，也不能替代其他模板、打印机、驱动或工作站的验证。
+
+## 使用发布文件夹
+
+1. 将新发布文件夹完整放在 D 盘可写目录，保留 EXE、`_internal`、`模板` 和启动脚本在一起，不覆盖旧版本目录。
+2. 双击 `标签自动打印工具_防卡住版.exe` 或 `启动标签打印.cmd`。
+3. 导入 Excel（`.xls` / `.xlsx`），选择工作表，核对识别的表头、日期和每行份数。
+4. 选择本站点已验证的 `.btw` 模板，核对“Excel 列 ↔ 模板字段”映射及实际打印机队列。
+5. 先选择一行试打，核对编号、内容、位置和份数，再提交所选批次。预检提示不能代替实物核对。
+6. 出现错误或 `unknown` 时先保留日志并核对队列、实物，不直接整批重打。
+
+完整操作说明见 [使用说明.txt](使用说明.txt)；版本切换和异常处理见 [修复版使用说明.txt](修复版使用说明.txt)。
+
+模板中需动态填充的对象应在 BarTender 的“数据源 → 名称”设置名称，如 `发货新编号`、`客户香型`、`发货粒径`。未命名对象保持模板原样，不参与映射。应使用与现场 BarTender 版本兼容的模板。
+
+## 数据与版本切换
+
+默认状态目录是 `程序目录\运行数据\`；源码运行时，“程序目录”指仓库根目录。
+
+| 内容 | 默认位置 |
 |---|---|
-| 映射配置 | `%APPDATA%\标签自动打印工具\profiles\` |
-| 打印任务日志 | `%APPDATA%\标签自动打印工具\logs\` |
-| 预览图缓存 | `%APPDATA%\标签自动打印工具\previews\` |
-| 模板（只读资源） | exe 同目录 `模板\` |
+| 字段映射 | `运行数据\profiles\` |
+| 任务增量日志与汇总 | `运行数据\logs\` |
+| 预览缓存 | `运行数据\previews\` |
+| 窗口配置与待核对标记 | `运行数据\window.ini` |
+| 程序临时文件与 COM 缓存 | `运行数据\.tmp\`、`运行数据\.cache\` |
+| 模板 | 程序目录下 `模板\` |
 
-> 配置文件按「模板名+路径指纹」保存，不同目录的同名模板互不干扰；v1.0 的旧配置会自动迁移。
+可用 `LABEL_PRINTER_HOME` 指定另一个可写状态目录。新目录不会自动继承旧版本的配置或待核对标记；更换版本前先核对未完成批次。需要保留映射时，可复制旧版 `profiles` 到新状态目录后重新核对模板路径、字段和打印机。模板路径变化可能需要重新选择映射。
 
-## 模板准备（一次性）
+## 从源码开发与验证
 
-模板里需要动态填充的对象必须有「数据源名称」：
+源码开发可复用已准备好的 Windows / Python 3.12.10 环境，也可在 D 盘仓库内建立 `.venv`。以下命令在仓库根目录执行，`python` 应指向准备使用的解释器；`requirements-build.txt` 固定开发、测试和构建所需依赖，包括 PySide6、pywin32、pytest 和 PyInstaller。复用已有环境时，将命令中的 `.\.venv\Scripts\python.exe` 替换为该环境解释器的绝对路径。
 
-BarTender 中双击文本/条码对象 → 数据源 → **名称** 填一个有意义的名字（如 `发货新编号`、`客户香型`、`发货粒径`）→ 保存模板。
+```powershell
+New-Item -ItemType Directory -Force .tmp, .cache | Out-Null
+$env:TEMP = (Resolve-Path .tmp).Path
+$env:TMP = $env:TEMP
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --cache-dir .cache\pip -r requirements-build.txt
 
-工具按这个名字列出可映射字段；没命名的对象不会出现在映射表里（保持模板原样打印）。
+# 单元测试；缺少本地真实样例时，相关可选用例会跳过
+.\.venv\Scripts\python.exe -m pytest -q --basetemp .tmp\pytest
 
-## 开发
+# 故障恢复及界面/Excel 模拟自检，不连接真实 BarTender 或打印机
+.\.venv\Scripts\python.exe run_app.py --self-test .tmp\self-test
+.\.venv\Scripts\python.exe run_app.py --ui-self-test .tmp\ui-self-test
 
-```bash
-pip install -r requirements.txt
-
-# 单元测试（43 个：Excel 解析/格式化/多表、映射配置、预检、worker 线程模型、路径）
-pytest
-
-# 开发机无 BarTender：干跑模式演示全流程（打印动作只写日志）
-python -m label_printer --mock
-
-# 离屏自测（不弹窗：加载→映射→预览PNG→线程打印→任务日志）
-python tools/smoke_mock.py
-
-# 连接真 BarTender 运行
-python -m label_printer
-
-# 打包 exe（自动重建发布 zip）
-build_exe.bat
+# 打开模拟界面
+.\.venv\Scripts\python.exe -m label_printer --mock
 ```
 
-## 架构要点
+自检使用生成的模拟数据，无需客户 Excel 清单。界面自检需要 Windows 中文字体，缺少字体时应先补齐该运行条件。需要实际打印时，在已配置 BarTender 的工作站使用 `.\.venv\Scripts\python.exe -m label_printer`，并先试打核对。自动化测试和模拟自检不验证真实 COM 环境、驱动、纸张输出或设备兼容性；本地通过也不代表远程 CI 已执行。
 
-- **COM 线程亲和**：BarTender COM 对象只在 QThread 内创建、使用、销毁（`pythoncom.CoInitialize` 配对），绝不跨线程共享——真机打印稳定性的关键
-- **后端抽象**：`PrintBackend` 接口 + BarTender / mock 双实现，UI 只面向接口；开发机无 BarTender 也能演示全流程
-- **标签校样**：BarTender `ExportImage` 直接导出 300 DPI 单张标签设计面（60×30mm 为约 708×354 px），避免整页预览缩小发糊；保留源图并支持 fit/100%/25%–400% 缩放与独立查看
-- **打印结果校验**：`Format.Print` 等到任务提交 spooler 并检查 `BtPrintResult` 与 Messages，失败行带 BarTender 原始错误
+现有 GitHub 工作流配置 Windows / Python 3.13，并继续调用 `tools/smoke_mock.py`；该脚本现在转调用 `--ui-self-test` 的模拟验证流程。本次未修改工作流，Python 3.13 的远程 CI 结果以合并请求中的实际检查为准，不能从 Python 3.12.10 本地结果推断。
 
-## 目录结构
+## 构建发布文件夹
 
+先完成上面的依赖安装，再在仓库根目录执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_release.ps1
 ```
-label_printer/
-  __main__.py            入口（--mock 干跑模式）
-  core/
-    excel_reader.py      Excel 加载、表头探测、单元格显示值格式化、张数解析
-    profiles.py          映射配置（模板名+路径哈希）、预检 validate_jobs
-    paths.py             resource_dir（只读资源）/ state_dir（%APPDATA%）
-    backend.py           打印后端抽象接口
-    bartender_backend.py BarTender COM 实现（目标机）
-    mock_backend.py      干跑实现（开发机调试）
-  ui/main_window.py      PySide6 主界面（三个 QThread worker：扫描/预览/打印）
-tests/                   pytest 单测（真实 xls 样例存在才跑，核心用例全部临时生成）
-tools/smoke_mock.py      离屏全流程自测
-.github/workflows/ci.yml Windows CI（pytest + 冒烟）
-```
+
+默认使用仓库内 `.venv\Scripts\python.exe`，也可通过 `-Python` 传入已安装依赖的解释器绝对路径。`build_exe.bat` 调用同一构建流程。
+
+输出为 `dist\v1.3.3\标签自动打印工具_防卡住版\`，包含 EXE、`_internal`、模板、修复版使用说明和唯一的启动脚本。构建工作文件、缓存和临时文件分别位于仓库内 `build`、`.cache`、`.tmp`。构建不会关闭正在运行的打印程序或清空打印队列。
+
+当前流程生成可携文件夹，不自动生成 ZIP，也不依赖客户 Word/PDF 手册。需要压缩发布时，将整个文件夹作为一个包保存，不能只分享 EXE。本仓库构建不包含额外的现场诊断工具包。
+
+## 开发排查选项
+
+| 环境变量 | 行为 |
+|---|---|
+| `LABEL_PRINTER_WAIT_FOR_COMPLETION` | 默认 `0`：提交模式；`1`：等待完成反馈，仅供排查。 |
+| `LABEL_PRINTER_PRINT_TIMEOUT_MS` | 默认 `60000`；外围监护再增加 15 秒。提交模式的阻塞保护由外围监护保证，不假定内层超时生效。 |
+| `LABEL_PRINTER_HOME` | 覆盖运行数据目录，使用 D 盘可写目录。 |
+| `LABEL_PRINTER_FAST_MODE` | 提交模式下不启用重复值省略；等待模式的可选优化仍须验证模板脚本兼容性。 |
+
+## 代码结构
+
+- `label_printer/core/excel_reader.py`：Excel 加载、表头识别、值和份数解析。
+- `label_printer/core/profiles.py`：字段映射与打印预检。
+- `label_printer/core/bartender_backend.py`：单进程内的 BarTender COM 操作与结果检查。
+- `label_printer/core/isolated_backend.py`：独立进程通信、取消、超时与有限清理。
+- `label_printer/core/job_journal.py`：任务快照和增量日志。
+- `label_printer/core/paths.py`、`runtime.py`：状态目录、缓存与临时文件。
+- `label_printer/ui/main_window.py`：界面、扫描/校样/打印调度和异常后的核对提示。
+- `tests/`：单元与模拟行为测试；`--self-test`、`--ui-self-test` 提供独立自检入口。
+
+本次变更不新增业务清单、真实运行日志或凭据。原仓库已跟踪的样例 XLS、`docs/` 和 `.research/` 保持原样；这不表示整个仓库不含样例或文档。具体提交范围、验证边界与回退说明见 [DELIVERY.md](DELIVERY.md)。
