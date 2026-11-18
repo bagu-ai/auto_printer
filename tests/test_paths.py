@@ -12,11 +12,10 @@ def test_state_dir_env_override(tmp_path, monkeypatch):
     assert previews_dir() == tmp_path / "previews"
 
 
-def test_state_dir_defaults_to_appdata(monkeypatch):
+def test_state_dir_defaults_to_portable_runtime_directory(monkeypatch):
     monkeypatch.delenv("LABEL_PRINTER_HOME", raising=False)
     monkeypatch.setenv("APPDATA", r"C:\Users\Test\AppData\Roaming")
-    assert state_dir() == r"C:\Users\Test\AppData\Roaming\标签自动打印工具" or \
-           str(state_dir()).endswith("标签自动打印工具")
+    assert state_dir() == resource_dir() / "运行数据"
 
 
 def test_resource_dir_exists():

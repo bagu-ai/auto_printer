@@ -5,7 +5,8 @@
 """
 from __future__ import annotations
 
-import json
+import copy
+import uuid
 import shutil
 import sys
 import threading
@@ -23,9 +24,11 @@ from PySide6.QtWidgets import (
     QTabWidget, QVBoxLayout, QWidget, QAbstractItemView,
 )
 
-from ..core.backend import BackendError, PrintBackend
+from .. import __version__
+from ..core.backend import BackendError, BackendCancelled, PrintOutcomeUnknown, PrintBackend
+from ..core.job_journal import JobJournal, JournalError
 from ..core.excel_reader import SheetData, load_excel
-from ..core.paths import logs_dir, previews_dir, profiles_dir, resource_dir
+from ..core.paths import logs_dir, previews_dir, profiles_dir, resource_dir, state_dir
 from ..core.profiles import (
     SOURCE_COLUMN, SOURCE_FIXED, SOURCE_NONE,
     FieldMapping, Profile, guess_mapping, load_profile, save_profile,
@@ -35,6 +38,7 @@ from .widgets import CollapsiblePanel, PreviewCanvas, PreviewToolbar, StatusPill
 
 OPTION_NONE = "（留空）"
 OPTION_FIXED = "（固定文本）"
+SETTINGS_INI_FORMAT = QSettings.IniFormat
 
 
 def _co_init():
@@ -50,6 +54,8 @@ def _co_init():
 class _BackendWorker(QThread):
     """基类：线程内 CoInitialize → 工厂创建后端 → 子类做事 → close → CoUninitialize。"""
 
+    cleanup_failed = Signal(str)
+
     def __init__(self, backend_factory, parent=None):
         super().__init__(parent)
         self._factory = backend_factory
@@ -62,16 +68,23 @@ class _BackendWorker(QThread):
         self.backend = self._factory()  # 关键：后端在本线程内创建
 
     def _teardown(self):
+        cleanup_error = ""
         try:
             if self.backend is not None:
                 self.backend.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            cleanup_error = str(exc)
         if getattr(self, "_pythoncom", None) is not None:
             try:
                 self._pythoncom.CoUninitialize()
             except Exception:
                 pass
+        cleanup_error = "；".join(dict.fromkeys(
+            str(item) for item in (cleanup_error, getattr(self.backend, "cleanup_warning", ""))
+            if item))
+        if cleanup_error:
+            self.cleanup_failed.emit(f"后台清理未确认：{cleanup_error}")
+        return cleanup_error
 
 
 class TemplateScanWorker(_BackendWorker):
@@ -123,61 +136,159 @@ class PreviewWorker(_BackendWorker):
 
 
 class PrintWorker(_BackendWorker):
-    """后台打印线程，避免卡住界面。"""
+    """One immutable batch, durable progress, and fail-stop submission semantics."""
 
-    progress = Signal(int, int, str)   # 当前, 总数, 消息
+    progress = Signal(int, int, str)
     log = Signal(str)
-    done = Signal(bool, str, list)     # 是否成功, 总结, 每行状态 list[dict]
+    done = Signal(bool, str, list)
 
     def __init__(self, backend_factory, template: str, printer: str,
-                 jobs: list[tuple[int, dict[str, str], int]], parent=None):
+                 jobs: list[tuple[int, dict[str, str], int]], parent=None,
+                 *, context: dict | None = None, journal_dir: Path | None = None):
         super().__init__(backend_factory, parent)
         self._template = template
         self._printer = printer
-        self._jobs = jobs              # (行号, 字段值, 张数)
+        self._jobs = copy.deepcopy(jobs)
+        self._context = copy.deepcopy(context or {})
+        self._context.update({
+            "app_version": __version__, "template": template, "printer": printer,
+            "jobs": [{"row": row, "values": values, "copies": copies}
+                     for row, values, copies in self._jobs],
+        })
+        self.batch_id = uuid.uuid4().hex
+        self._journal_dir = Path(journal_dir) if journal_dir is not None else logs_dir()
+        self.journal_path = self._journal_dir / f"{self.batch_id}.jsonl"
+        self.summary_path = self.journal_path.with_suffix(".json")
+        self._journal = None
+        self._current_row = None
         self._cancelled = False
         self.statuses: list[dict] = []
+        self.result = None
+        self.cleanup_warning = ""
+
+    @property
+    def snapshot(self) -> dict:
+        return copy.deepcopy(self._context)
 
     def cancel(self):
         self._cancelled = True
+        cancel = getattr(self.backend, "cancel", None)
+        if callable(cancel):
+            try:
+                cancel()
+            except Exception as exc:
+                self.log.emit(f"取消请求未确认：{exc}；后续行已停止，请核对当前任务。")
+
+    def _observe(self, event: dict):
+        # The isolated backend waits for this durable write before advancing.
+        durable = event.get("operation") == "print" and event.get("phase") == "before"
+        self._journal.append("phase", row=self._current_row, detail=event, durable=durable)
 
     def run(self):
-        ok, failed = 0, 0
+        success = False
+        message = "任务尚未提交"
         self.statuses = []
         try:
+            self._journal = JobJournal(self._journal_dir, self.snapshot, self.batch_id)
+            self.log.emit(f"批次 {self.batch_id}，增量日志：{self.journal_path}")
+            if self._cancelled:
+                raise BackendCancelled("已取消，尚未提交")
             self._setup()
+            observer = getattr(self.backend, "set_observer", None)
+            if callable(observer):
+                observer(self._observe)
+            if self._cancelled:
+                raise BackendCancelled("已取消，尚未提交")
             self.backend.open(self._template, self._printer)
             total = len(self._jobs)
             for i, (row_no, values, copies) in enumerate(self._jobs, 1):
                 if self._cancelled:
-                    self.done.emit(False, f"已取消（完成 {ok} 行，失败 {failed} 行）",
-                                   self.statuses)
-                    return
+                    raise BackendCancelled("已取消后续行；已提交部分请核对出纸")
+                self._current_row = row_no
                 label = next((v for v in values.values() if v), f"第 {row_no} 行")
-                entry = {"row": row_no, "values": values, "copies": copies,
-                         "status": "submitted", "error": ""}
+                entry = {"row": row_no, "values": copy.deepcopy(values), "copies": copies,
+                         "status": "not_submitted", "error": "",
+                         "job_name": f"AP-{self.batch_id[:12]}-r{row_no}"}
+                self.statuses.append(entry)
+                self._journal.append("row_start", **entry)
+                set_name = getattr(self.backend, "set_job_name", None)
+                if callable(set_name):
+                    set_name(entry["job_name"])
+                if self._cancelled:
+                    raise BackendCancelled("已取消，当前行尚未提交")
+                self._journal.append("row_call_begin", row=row_no, job_name=entry["job_name"])
+                entry["status"] = "submitting"
                 try:
                     self.backend.print_label(values, copies)
-                    ok += 1
-                    self.statuses.append(entry)
-                    self.progress.emit(i, total, f"已发送：{label} × {copies} 张")
+                except BackendCancelled as exc:
+                    entry.update(status="cancelled", error=str(exc))
+                    self._journal.append("row_cancelled", **entry)
+                    raise
+                except (PrintOutcomeUnknown, JournalError) as exc:
+                    entry.update(status="unknown", error=str(exc))
+                    # If the disk itself failed, the durable row_call_begin remains
+                    # an unresolved submission for manual reconciliation.
+                    if not isinstance(exc, JournalError):
+                        self._journal.append("row_unknown", **entry)
+                    raise PrintOutcomeUnknown(str(exc)) from exc
                 except Exception as exc:
-                    failed += 1
-                    entry["status"] = "failed"
-                    entry["error"] = str(exc)
-                    self.statuses.append(entry)
-                    self.log.emit(f"[失败] 第 {row_no} 行（{label}）：{exc}")
-            msg = f"打印完成：成功 {ok} 行" + (f"，失败 {failed} 行" if failed else "")
-            self.done.emit(failed == 0, msg, self.statuses)
+                    entry.update(status="failed", error=str(exc))
+                    self._journal.append("row_failed", **entry)
+                    raise BackendError(f"第 {row_no} 行失败：{exc}") from exc
+                entry["status"] = "submitted"
+                self._journal.append("row_submitted", **entry)
+                self.progress.emit(i, total, f"已提交：{label} × {copies} 张（出纸请核对）")
+            success = True
+            message = f"提交完成：{len(self._jobs)} 行，出纸请核对"
+        except PrintOutcomeUnknown as exc:
+            message = (f"当前行结果未知，已停止后续提交：{exc}。"
+                       "请核对 Windows 队列和实物标签编号；不要直接重打未知行。")
+        except BackendCancelled as exc:
+            message = str(exc)
+            if self._journal is not None:
+                try:
+                    self._journal.append("cancelled", message=message)
+                except JournalError as log_exc:
+                    message += f"；{log_exc}"
         except Exception as exc:
-            self.done.emit(False, f"打印中断：{exc}", self.statuses)
+            message = f"已停止后续提交：{exc}。已提交部分请核对，勿整批重复打印。"
         finally:
-            self._teardown()
+            # Release COM/process resources before the UI can offer another batch.
+            self._current_row = None
+            cleanup_error = self._teardown()
+            self.cleanup_warning = cleanup_error or ""
+            if self.cleanup_warning:
+                message += (f"；后台清理未确认：{self.cleanup_warning}。"
+                            "BarTender 或队列可能仍有任务，请核对后再打印。")
+                self.log.emit(message)
+            attempted = {entry["row"] for entry in self.statuses}
+            self.statuses.extend(
+                {"row": row, "values": copy.deepcopy(values), "copies": copies,
+                 "status": "not_attempted", "error": ""}
+                for row, values, copies in self._jobs if row not in attempted)
+            if self._journal is not None:
+                try:
+                    if self.cleanup_warning:
+                        self._journal.append("cleanup_warning", message=self.cleanup_warning)
+                    self._journal.append("batch_end", success=success, message=message,
+                                         rows=self.statuses)
+                    self._journal.save_summary(success, message, self.statuses)
+                except JournalError as exc:
+                    success = False
+                    message += f"；{exc}。请保留增量日志并核对实物。"
+                finally:
+                    self._journal.close()
+            self.result = (success, message, copy.deepcopy(self.statuses))
+            self.done.emit(*self.result)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, backend_factory, backend_name: str = ""):
+    def __init__(self, backend_factory, backend_name: str = "", *,
+                 wait_for_completion: bool = False):
         super().__init__()
+        if not isinstance(wait_for_completion, bool):
+            raise TypeError("wait_for_completion 必须是布尔值")
+        self._wait_for_completion = wait_for_completion
         self._backend_factory = backend_factory
         self.sheet: SheetData | None = None
         self.template_fields: list[str] = []
@@ -185,16 +296,25 @@ class MainWindow(QMainWindow):
         self._scan_worker: TemplateScanWorker | None = None
         self._preview_worker: PreviewWorker | None = None
         self._scan_epoch = 0
+        self._scan_pending = False
+        self._printing = False
+        self._closing = False
+        self._locked_controls = []
+        self._last_print_result = None
         self._preview_epoch = 0
         self._preview_active_epoch = 0
         self._preview_pending = False
         self._latest_preview_path = ""
         self._saved_printer = ""  # 当前模板 profile 里保存的打印机
         self._backend_name = backend_name
-        self._settings = QSettings("BG0", "LabelPrinter")
+        state_dir().mkdir(parents=True, exist_ok=True)
+        self._settings = QSettings(str(state_dir() / "window.ini"), SETTINGS_INI_FORMAT)
+        self._needs_reconcile = str(self._settings.value("needsReconcile", "false")).lower() == "true"
+        self._reconcile_journal = str(self._settings.value("reconcileJournal", ""))
+        self._last_cleanup_warning = ""
         self._log_count = 0
 
-        title = "标签自动打印工具"
+        title = f"标签自动打印工具 v{__version__}"
         if backend_name:
             title += f" — {backend_name}"
         self.setWindowTitle(title)
@@ -233,6 +353,8 @@ class MainWindow(QMainWindow):
         self.side_tabs.setCurrentIndex(int(self._settings.value("sideTab", 0)))
         self.log_panel.set_expanded(
             str(self._settings.value("logExpanded", "false")).lower() == "true")
+        if not self._wait_for_completion:
+            self.log("当前为提交模式：任务提交后，请核对实际标签的内容和份数。")
         self._scan_templates()
 
     # ---------------------------------------------------------------- UI
@@ -443,6 +565,8 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         play.addWidget(self.progress)
         layout.addWidget(print_bar)
+        self._editing_panels = [inputs, data_panel, self.side_tabs,
+                                self.printer_combo, btn_printer]
 
         # 运行记录默认收起，错误时自动展开
         self.log_view = QPlainTextEdit()
@@ -462,10 +586,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ 拖放
 
     def dragEnterEvent(self, event):
+        if self._state_changes_blocked():
+            event.ignore()
+            return
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
 
     def dropEvent(self, event):
+        if self._state_changes_blocked():
+            event.ignore()
+            return
         for url in event.mimeData().urls():
             path = url.toLocalFile()
             if path.lower().endswith((".xls", ".xlsx")):
@@ -479,6 +609,8 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- Excel
 
     def _browse_excel(self):
+        if self._state_changes_blocked():
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "选择 Excel 清单", str(resource_dir()),
             "Excel 文件 (*.xls *.xlsx)")
@@ -497,6 +629,8 @@ class MainWindow(QMainWindow):
 
     def _load_excel(self, path: str, header_row: int | None = None,
                     sheet_name: str | None = None):
+        if self._state_changes_blocked():
+            return
         prev_state = self._snapshot_row_state()
         try:
             sheet = load_excel(path, sheet_name=sheet_name, header_row=header_row)
@@ -531,12 +665,16 @@ class MainWindow(QMainWindow):
         self.log(msg)
 
     def _reload_excel(self):
+        if self._state_changes_blocked():
+            return
         if self.excel_path.text():
             self._load_excel(self.excel_path.text(),
                              header_row=self.header_row.value() - 1,
                              sheet_name=self.sheet_combo.currentData())
 
     def _sheet_changed(self):
+        if self._state_changes_blocked():
+            return
         if self.sheet is not None and self.excel_path.text():
             name = self.sheet_combo.currentData()
             if name and name != self.sheet.sheet_name:
@@ -632,10 +770,12 @@ class MainWindow(QMainWindow):
         self.data_summary.setText(summary)
         self.top_summary.setText(f"数据 {len(self.sheet)} 行  |  待打印 {checked} 行 / {total} 张")
         self.btn_print.setText(f"打印 {checked} 行 · {total} 张")
-        self.btn_print.setEnabled(checked > 0 and not self._worker_running(self.worker))
+        self.btn_print.setEnabled(checked > 0 and not self._state_changes_blocked())
         self.btn_print.setToolTip("" if checked else "请至少勾选一行数据")
 
     def _set_all_checked(self, checked: bool):
+        if self._state_changes_blocked():
+            return
         for r in range(self.data_table.rowCount()):
             w = self.data_table.cellWidget(r, 0)
             if isinstance(w, QCheckBox):
@@ -645,6 +785,8 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 模板
 
     def _scan_templates(self):
+        if self._state_changes_blocked():
+            return
         self.template_combo.blockSignals(True)
         self.template_combo.clear()
         tpl_dir = resource_dir() / "模板"
@@ -658,6 +800,8 @@ class MainWindow(QMainWindow):
             self.log("未在「模板」目录找到 .btw 文件，请点“浏览…”手动选择")
 
     def _browse_template(self):
+        if self._state_changes_blocked():
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "选择 BarTender 模板", str(resource_dir()),
             "BarTender 模板 (*.btw)")
@@ -665,6 +809,8 @@ class MainWindow(QMainWindow):
             self._add_template(path)
 
     def _add_template(self, path: str):
+        if self._state_changes_blocked():
+            return
         idx = self.template_combo.findData(path)
         if idx < 0:
             self.template_combo.addItem(Path(path).name, path)
@@ -672,6 +818,8 @@ class MainWindow(QMainWindow):
         self.template_combo.setCurrentIndex(idx)
 
     def _template_changed(self):
+        if self._state_changes_blocked():
+            return
         path = self.template_combo.currentData()
         if not path:
             return
@@ -682,9 +830,14 @@ class MainWindow(QMainWindow):
         self._latest_preview_path = ""
         self.preview_canvas.clear_preview("模板已切换，读取字段后将自动刷新校样")
         self.log(f"正在读取模板字段：{Path(path).name} …")
+        if self._worker_running(self._scan_worker):
+            self._scan_pending = True
+            return
+        self._scan_pending = False
         worker = TemplateScanWorker(self._backend_factory, path, self._scan_epoch, self)
         worker.fields_ready.connect(self._on_template_fields)
         worker.failed.connect(self._on_template_scan_failed)
+        worker.cleanup_failed.connect(self.log)
         worker.finished.connect(worker.deleteLater)
         # worker 销毁后属性置空，避免 closeEvent 等处对悬空 C++ 对象调 isRunning
         worker.finished.connect(self._clear_scan_worker)
@@ -695,6 +848,8 @@ class MainWindow(QMainWindow):
         # 旧 worker 的 finished 可能晚于新 worker 启动，只清自己
         if self._scan_worker is self.sender():
             self._scan_worker = None
+            if self._scan_pending and not self._state_changes_blocked():
+                QTimer.singleShot(0, self._template_changed)
 
     def _on_template_fields(self, epoch: int, fields: list[str]):
         if epoch != self._scan_epoch:
@@ -808,6 +963,8 @@ class MainWindow(QMainWindow):
         suffix_edit.setEnabled(has_source)
 
     def _auto_map(self):
+        if self._state_changes_blocked():
+            return
         if self.template_fields:
             self._fill_mapping_table()
 
@@ -846,6 +1003,8 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 预览
 
     def _schedule_preview(self):
+        if self._state_changes_blocked():
+            return
         self._preview_epoch += 1
         if hasattr(self, "_preview_timer"):
             self._preview_timer.start()
@@ -857,6 +1016,8 @@ class MainWindow(QMainWindow):
         return None
 
     def _refresh_preview(self):
+        if self._state_changes_blocked():
+            return
         if self.sheet is None or not self.template_fields:
             return
         if not self.template_combo.currentData():
@@ -897,6 +1058,7 @@ class MainWindow(QMainWindow):
             lambda path, e=epoch: self._on_preview_ready(e, path))
         worker.failed.connect(
             lambda message, e=epoch: self._on_preview_failed(e, message))
+        worker.cleanup_failed.connect(self.log)
         worker.finished.connect(worker.deleteLater)
         worker.finished.connect(self._on_preview_worker_finished)
         self._preview_worker = worker
@@ -926,7 +1088,8 @@ class MainWindow(QMainWindow):
     def _on_preview_worker_finished(self):
         if self._preview_worker is self.sender():
             self._preview_worker = None
-        if self._preview_pending or self._preview_active_epoch != self._preview_epoch:
+        if (not self._state_changes_blocked() and
+                (self._preview_pending or self._preview_active_epoch != self._preview_epoch)):
             QTimer.singleShot(0, self._refresh_preview)
 
     def _open_preview_dialog(self):
@@ -949,6 +1112,8 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 打印
 
     def _refresh_printers(self):
+        if self._state_changes_blocked():
+            return
         current = self.printer_combo.currentText()
         printers = self._list_printers_safe()
         self.printer_combo.clear()
@@ -1030,8 +1195,15 @@ class MainWindow(QMainWindow):
         return jobs
 
     def _start_print(self, test_only: bool):
-        if self._worker_running(self.worker):
+        if self._state_changes_blocked():
             return
+        if (self._worker_running(self._scan_worker) or self._scan_pending or
+                self._worker_running(self._preview_worker)):
+            QMessageBox.information(self, "后台准备尚未结束",
+                                    "模板读取或校样正在进行，请等待结束后再打印。")
+            return
+        self._preview_timer.stop()
+        self._preview_pending = False
         jobs = self._build_jobs(test_only)
         if jobs is None:
             return
@@ -1047,17 +1219,47 @@ class MainWindow(QMainWindow):
             self.log(f"[警告] 映射配置保存失败（不影响本次打印）：{exc}")
 
         total_labels = sum(c for _, _, c in jobs)
+        if self._needs_reconcile:
+            ret = QMessageBox.question(
+                self, "先核对上一批任务",
+                "上一批存在已提交、结果未知或未正常结束的任务。\n"
+                "请先核对 Windows 打印队列、最后实际出纸编号，并仅勾选确实需要打印的行。\n"
+                "不要直接重打结果未知的标签。\n"
+                f"上一批日志：{self._reconcile_journal or '运行数据/logs'}\n\n"
+                "是否已经完成上述核对？", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ret != QMessageBox.Yes:
+                return
+            self._set_reconcile_required(False)
         if not test_only:
+            mode_note = ("" if self._wait_for_completion else
+                         "\n任务提交后，请核对实际标签的编号和份数。")
             ret = QMessageBox.question(
                 self, "确认打印",
                 f"将向「{printer or '模板默认打印机'}」发送 {len(jobs)} 行、"
-                f"共 {total_labels} 张标签，是否继续？")
+                f"共 {total_labels} 张标签，是否继续？{mode_note}")
             if ret != QMessageBox.Yes:
                 return
 
+        # Modal confirmation can process queued signals; recheck before starting.
+        self._preview_timer.stop()
+        if (self._worker_running(self._scan_worker) or self._scan_pending or
+                self._worker_running(self._preview_worker)):
+            QMessageBox.information(self, "后台准备尚未结束",
+                                    "模板读取或校样刚刚启动，请等待结束后再打印。")
+            return
+
         self.log(f"开始{'试打' if test_only else '打印'}：模板 {Path(template).name}，"
                  f"打印机 {printer or '（模板默认）'}，{len(jobs)} 行 / {total_labels} 张")
-        self.worker = PrintWorker(self._backend_factory, template, printer, jobs, self)
+        self.worker = PrintWorker(
+            self._backend_factory, template, printer, jobs, self,
+            context={"excel": self.excel_path.text(),
+                     "sheet": self.sheet.sheet_name if self.sheet else "",
+                     "wait_for_completion": self._wait_for_completion,
+                     "print_mode": "standard" if self._wait_for_completion else "submit_compatibility"})
+        self._last_print_result = None
+        self._last_cleanup_warning = ""
+        # If this process exits before completion, the next launch still warns.
+        self._set_reconcile_required(True, str(self.worker.journal_path))
         self.worker.progress.connect(self._on_progress)
         self.worker.log.connect(self.log)
         self.worker.done.connect(self._on_done)
@@ -1071,11 +1273,17 @@ class MainWindow(QMainWindow):
     def _cancel_print(self):
         if self.worker is not None:
             self.worker.cancel()
-            self.log("正在取消…")
+            self.log("正在取消后续提交；当前行可能已进入打印队列，请核对出纸。")
 
     def _clear_print_worker(self):
         if self.worker is self.sender():
             self.worker = None
+            result = self._last_print_result
+            self._last_print_result = None
+            result_missing = result is None
+            if result is None:
+                result = (False, "后台线程已结束但结果未取得，请核对增量日志和实物。", [])
+            self._finish_print_ui(*result, result_missing=result_missing)
 
     def _on_progress(self, current: int, total: int, message: str):
         self.progress.setMaximum(total)
@@ -1083,38 +1291,62 @@ class MainWindow(QMainWindow):
         self.log(message)
 
     def _on_done(self, success: bool, message: str, statuses: list):
-        self._set_printing_state(False)
-        self.log(("✔ " if success else "✘ ") + message)
+        self._last_print_result = (success, message, statuses)
+        self._last_cleanup_warning = getattr(self.worker, "cleanup_warning", "")
         self._write_job_log(success, statuses)
+
+    def _finish_print_ui(self, success: bool, message: str, statuses: list,
+                         *, result_missing: bool = False):
+        # Only QThread.finished releases the controls, including close/Quit time.
+        self._set_printing_state(False)
+        needs_reconcile = result_missing or bool(self._last_cleanup_warning) or (
+            not success and any(entry.get("status") in
+                                ("submitted", "submitting", "unknown", "failed")
+                                for entry in statuses))
+        self._set_reconcile_required(needs_reconcile)
+        self.log(("✔ " if success else "✘ ") + message)
         self.runtime_status.set_state(
-            "打印完成" if success else "打印有失败", "success" if success else "error")
+            "提交完成，出纸请核对" if success else "已停止，请核对",
+            "success" if success else "error")
         self.statusBar().showMessage(message, 8000)
-        if not success:
+        if not success or self._last_cleanup_warning:
             self.log_panel.set_expanded(True)
             QMessageBox.warning(self, "打印结果", message)
 
+    def _set_reconcile_required(self, required: bool, journal: str | None = None):
+        self._needs_reconcile = required
+        if journal is not None:
+            self._reconcile_journal = journal
+            self._settings.setValue("reconcileJournal", journal)
+        self._settings.setValue("needsReconcile", required)
+        self._settings.sync()
+
     def _write_job_log(self, success: bool, statuses: list):
-        """每次打印（含试打）写一份任务日志 JSON，便于查错与补打。"""
-        try:
-            out = logs_dir()
-            out.mkdir(parents=True, exist_ok=True)
-            path = out / f"{datetime.now():%Y%m%d_%H%M%S}.json"
-            record = {
-                "time": datetime.now().isoformat(timespec="seconds"),
-                "success": success,
-                "excel": self.excel_path.text(),
-                "sheet": self.sheet.sheet_name if self.sheet else "",
-                "template": self.template_combo.currentData() or "",
-                "printer": self.printer_combo.currentData() or "",
-                "rows": statuses,
-            }
-            path.write_text(json.dumps(record, ensure_ascii=False, indent=2),
-                            encoding="utf-8")
-            self.log(f"任务日志已保存：{path}")
-        except OSError as exc:
-            self.log(f"[警告] 任务日志写入失败：{exc}")
+        """The worker has already durably saved its immutable batch snapshot."""
+        worker = self.worker
+        if worker is not None:
+            self.log(f"本批增量日志：{worker.journal_path}")
+            if worker.summary_path.exists():
+                self.log(f"本批任务汇总：{worker.summary_path}")
+
+    def _state_changes_blocked(self) -> bool:
+        return self._printing or self._closing or self._worker_running(self.worker)
 
     def _set_printing_state(self, printing: bool):
+        self._printing = printing
+        if printing:
+            self._preview_timer.stop()
+            self._preview_pending = False
+            self._preview_epoch += 1
+            self._locked_controls = [(widget, widget.isEnabled())
+                                     for widget in self._editing_panels]
+            for widget, _ in self._locked_controls:
+                widget.setEnabled(False)
+        else:
+            for widget, was_enabled in self._locked_controls:
+                widget.setEnabled(was_enabled)
+            self._locked_controls = []
+        self.setAcceptDrops(not printing)
         self.btn_print.setEnabled(not printing and bool(self._checked_rows()))
         self.btn_test.setEnabled(not printing)
         self.btn_cancel.setEnabled(printing)
@@ -1140,20 +1372,29 @@ class MainWindow(QMainWindow):
             return False
 
     def closeEvent(self, event):
-        if self._worker_running(self.worker):
-            self.worker.cancel()
-            if not self.worker.wait(10000):
-                ret = QMessageBox.question(
-                    self, "打印仍在进行",
-                    "打印任务 10 秒内未能停止。\n"
-                    "「继续等待」将保留窗口；「强制退出」可能残留 BarTender 后台进程。",
-                    "继续等待", "强制退出")
-                if ret == 0:
-                    event.ignore()
-                    return
-        for w in (self._scan_worker, self._preview_worker):
-            if self._worker_running(w):
-                w.wait(3000)
+        self._closing = True
+        self._preview_timer.stop()
+        self._preview_pending = False
+        self._scan_pending = False
+        active = [w for w in (self.worker, self._scan_worker, self._preview_worker)
+                  if self._worker_running(w)]
+        for worker in active:
+            cancel = getattr(worker, "cancel", None)
+            if callable(cancel):
+                cancel()
+            else:
+                cancel_backend = getattr(worker.backend, "cancel", None)
+                if callable(cancel_backend):
+                    cancel_backend()
+        for worker in active:
+            if not worker.wait(10000):
+                self._closing = False
+                event.ignore()
+                QMessageBox.warning(
+                    self, "后台任务尚未结束",
+                    "正在安全停止后台任务，窗口暂时保留。请稍后再次关闭。"
+                    "已提交或结果未知的标签请先核对队列和实物，不要直接重打。")
+                return
         self._settings.setValue("windowGeometry", self.saveGeometry())
         self._settings.setValue("mainSplitter", self.main_splitter.saveState())
         self._settings.setValue("sideTab", self.side_tabs.currentIndex())

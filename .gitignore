@@ -20,3 +20,20 @@ profiles/
 # IDE
 .vscode/
 .idea/
+
+# Local environments, runtime state and configurable caches
+.venv/
+.build_venv/
+.pytest_cache/
+运行数据/
+.cache/
+.tmp/
+*.log
+
+# Local authentication and secrets
+.env
+.env.*
+*.pem
+*.key
+secrets.json
+credentials.json

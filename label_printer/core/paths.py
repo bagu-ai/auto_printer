@@ -1,7 +1,7 @@
 """路径约定：只读资源目录 vs 可写状态目录。
 
 - resource_dir()：模板等随程序分发的只读资源（exe 同目录 / 项目根）
-- state_dir()：用户配置与日志（%APPDATA%，可用 LABEL_PRINTER_HOME 覆盖便于测试）
+- state_dir()：程序目录下运行数据，可用 LABEL_PRINTER_HOME 覆盖。
 """
 from __future__ import annotations
 
@@ -24,11 +24,9 @@ def state_dir() -> Path:
     override = os.environ.get("LABEL_PRINTER_HOME")
     if override:
         return Path(override)
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        return Path(appdata) / APP_NAME
-    # 非 Windows 或异常环境退回用户目录
-    return Path.home() / f".{APP_NAME}"
+    # Portable distribution: configurable state stays next to the D-drive app.
+    # Do not migrate or mutate an earlier version's APPDATA profiles implicitly.
+    return resource_dir() / "运行数据"
 
 
 def profiles_dir() -> Path:
